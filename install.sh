@@ -72,7 +72,7 @@ fi
 
 # 4. Restart gateway
 echo "→ Restarting OpenClaw gateway..."
-openclaw gateway restart 2>/dev/null || true
+nohup openclaw gateway restart > /dev/null 2>&1 &
 
 if [ "$MODE" = "install" ]; then
   echo "✓ Done. Plugin '$PLUGIN_ID' installed and enabled."
