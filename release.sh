@@ -25,5 +25,9 @@ git push && git push --tags
 echo "  ✓ Committed and pushed tag v$VERSION"
 
 # 4. Publish to npm
-npm publish
+if [ -n "${NPM_TOKEN:-}" ]; then
+  npm publish --//registry.npmjs.org/:_authToken="$NPM_TOKEN"
+else
+  npm publish
+fi
 echo "✓ Published openclaw-openviking-plugin@$VERSION to npm"
