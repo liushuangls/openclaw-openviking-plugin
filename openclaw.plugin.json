@@ -1,0 +1,18 @@
+{
+  "id": "openclaw-openviking-plugin",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": { "type": "string" },
+      "apiKey": { "type": "string" },
+      "autoRecall": { "type": "boolean" },
+      "autoCapture": { "type": "boolean" },
+      "recallLimit": { "type": "number" },
+      "recallScoreThreshold": { "type": "number" },
+      "recallTokenBudget": { "type": "number" },
+      "recallMaxContentChars": { "type": "number" },
+      "commitTokenThreshold": { "type": "number" }
+    }
+  }
+}
