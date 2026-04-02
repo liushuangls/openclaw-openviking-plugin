@@ -25,6 +25,18 @@ export type CommitSessionResult = {
   error?: string;
 };
 
+export type TaskResult = {
+  status: string;
+  result?: unknown;
+  error?: string;
+};
+
+type CommitSessionOptions = {
+  wait?: boolean;
+  timeoutMs?: number;
+  agentId?: string;
+};
+
 type OpenVikingClientOptions = {
   baseUrl: string;
   apiKey?: string;
@@ -88,13 +100,68 @@ export class OpenVikingClient {
     );
   }
 
-  async commitSession(sessionId: string, agentId?: string): Promise<CommitSessionResult> {
-    return this.request<CommitSessionResult>(
+  async commitSession(
+    sessionId: string,
+    optionsOrAgentId?: string | CommitSessionOptions,
+  ): Promise<CommitSessionResult> {
+    const options: CommitSessionOptions =
+      typeof optionsOrAgentId === "string"
+        ? { agentId: optionsOrAgentId }
+        : (optionsOrAgentId ?? {});
+
+    const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       {
         method: "POST",
         body: JSON.stringify({}),
       },
+      options.agentId,
+    );
+
+    if (!options.wait || !result.task_id) {
+      return result;
+    }
+
+    const deadline = Date.now() + (options.timeoutMs ?? 120_000);
+    while (Date.now() < deadline) {
+      await sleep(500);
+      const task = await this.getTask(result.task_id, options.agentId).catch(() => null);
+      if (!task) {
+        break;
+      }
+      if (task.status === "completed") {
+        const taskResult =
+          task.result && typeof task.result === "object"
+            ? (task.result as Record<string, unknown>)
+            : {};
+        result.status = "completed";
+        result.memories_extracted = (taskResult.memories_extracted ??
+          {}) as Record<string, number>;
+        return result;
+      }
+      if (task.status === "failed") {
+        result.status = "failed";
+        result.error = task.error;
+        return result;
+      }
+    }
+
+    result.status = "timeout";
+    return result;
+  }
+
+  async getTask(taskId: string, agentId?: string): Promise<TaskResult> {
+    return this.request<TaskResult>(
+      `/api/v1/tasks/${encodeURIComponent(taskId)}`,
+      { method: "GET" },
+      agentId,
+    );
+  }
+
+  async delete(uri: string, agentId?: string): Promise<void> {
+    await this.request<void>(
+      `/api/v1/fs/delete?uri=${encodeURIComponent(uri)}`,
+      { method: "DELETE" },
       agentId,
     );
   }
@@ -141,4 +208,8 @@ export class OpenVikingClient {
       clearTimeout(timer);
     }
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

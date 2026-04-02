@@ -1,6 +1,12 @@
 // @ts-ignore OpenClaw provides this module at plugin runtime.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { OpenVikingClient, type FindResult, type FindResultItem } from "./client.js";
+import { Type } from "@sinclair/typebox";
+import {
+  OpenVikingClient,
+  type CommitSessionResult,
+  type FindResult,
+  type FindResultItem,
+} from "./client.js";
 
 type HookContext = {
   agentId?: string;
@@ -24,9 +30,36 @@ type AgentEndEvent = {
   messages: unknown[];
 };
 
+type ToolTextContent = {
+  type: "text";
+  text: string;
+};
+
+type ToolResult = {
+  content: ToolTextContent[];
+  details?: Record<string, unknown>;
+};
+
+type ToolDefinition = {
+  name: string;
+  label: string;
+  description: string;
+  parameters: unknown;
+  execute: (_toolCallId: string, params: Record<string, unknown>) => Promise<ToolResult>;
+};
+
+type ToolContext = HookContext;
+
 type OpenClawPluginApiLike = {
   pluginConfig?: Record<string, unknown>;
   logger: PluginLoggerLike;
+  registerTool: {
+    (tool: ToolDefinition, opts?: { name?: string; names?: string[] }): void;
+    (
+      factory: (ctx: ToolContext) => ToolDefinition,
+      opts?: { name?: string; names?: string[] },
+    ): void;
+  };
   on(
     hookName: "before_prompt_build",
     handler: (
@@ -85,9 +118,9 @@ const AGENT_MEMORIES_URI = "viking://agent/memories";
 
 export default definePluginEntry({
   id: "openclaw-openviking-plugin",
-  name: "OpenViking Memory (hook-only)",
+  name: "OpenViking Memory",
   description:
-    "Long-term memory via a running OpenViking HTTP server — autoRecall + autoCapture as hooks",
+    "Long-term memory via a running OpenViking HTTP server — hooks plus memory tools",
   register(api: OpenClawPluginApiLike) {
     const cfg = resolvePluginConfig(api.pluginConfig);
     const client = new OpenVikingClient({
@@ -95,6 +128,341 @@ export default definePluginEntry({
       apiKey: cfg.apiKey,
     });
     const prePromptCounts = new Map<string, number>();
+
+    api.registerTool((ctx: ToolContext) => ({
+      name: "memory_recall",
+      label: "Memory Recall (OpenViking)",
+      description:
+        "Search OpenViking long-term memories for relevant user facts, preferences, and prior decisions.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query" }),
+        limit: Type.Optional(Type.Number({ description: "Maximum number of results to return" })),
+        scoreThreshold: Type.Optional(
+          Type.Number({ description: "Minimum score between 0 and 1" }),
+        ),
+        targetUri: Type.Optional(
+          Type.String({
+            description:
+              "Optional search scope URI. Defaults to both viking://user/memories and viking://agent/memories",
+          }),
+        ),
+      }),
+      async execute(_toolCallId: string, params: Record<string, unknown>): Promise<ToolResult> {
+        const query = normalizeNonEmptyString(params.query);
+        if (!query) {
+          return textToolResult("Provide a non-empty query.", {
+            error: "missing_query",
+          });
+        }
+
+        const limit = clampInteger(params.limit, cfg.recallLimit, 1, 50);
+        const scoreThreshold = clampNumber(
+          params.scoreThreshold,
+          cfg.recallScoreThreshold,
+          0,
+          1,
+        );
+        const targetUri = normalizeNonEmptyString(params.targetUri) || undefined;
+        const requestLimit = Math.max(limit * 4, 20);
+        const agentId = resolveToolAgentId(ctx);
+
+        try {
+          if (targetUri) {
+            const result = await client.find(query, targetUri, requestLimit, 0, agentId);
+            const memories = selectToolMemories(result.memories ?? [], {
+              limit,
+              scoreThreshold,
+            });
+            if (memories.length === 0) {
+              return textToolResult("No relevant OpenViking memories found.", {
+                count: 0,
+                scoreThreshold,
+                targetUri,
+              });
+            }
+            return textToolResult(
+              `Found ${memories.length} memories:\n\n${formatMemoryLines(memories)}`,
+              {
+                count: memories.length,
+                memories,
+                requestLimit,
+                scoreThreshold,
+                targetUri,
+              },
+            );
+          }
+
+          const [userSettled, agentSettled] = await Promise.allSettled([
+            client.find(query, USER_MEMORIES_URI, requestLimit, 0, agentId),
+            client.find(query, AGENT_MEMORIES_URI, requestLimit, 0, agentId),
+          ]);
+
+          if (userSettled.status === "rejected") {
+            api.logger.warn?.(
+              `openclaw-openviking-plugin: memory_recall user search failed: ${String(
+                userSettled.reason,
+              )}`,
+            );
+          }
+          if (agentSettled.status === "rejected") {
+            api.logger.warn?.(
+              `openclaw-openviking-plugin: memory_recall agent search failed: ${String(
+                agentSettled.reason,
+              )}`,
+            );
+          }
+          if (userSettled.status === "rejected" && agentSettled.status === "rejected") {
+            return textToolResult("OpenViking memory recall failed.", {
+              error: "both_searches_failed",
+            });
+          }
+
+          const memories = selectToolMemories(
+            dedupeMemoriesByUri([
+              ...(unwrapFindResult(userSettled).memories ?? []),
+              ...(unwrapFindResult(agentSettled).memories ?? []),
+            ]),
+            {
+              limit,
+              scoreThreshold,
+            },
+          );
+
+          if (memories.length === 0) {
+            return textToolResult("No relevant OpenViking memories found.", {
+              count: 0,
+              scoreThreshold,
+              targetUri: null,
+            });
+          }
+
+          return textToolResult(
+            `Found ${memories.length} memories:\n\n${formatMemoryLines(memories)}`,
+            {
+              count: memories.length,
+              memories,
+              requestLimit,
+              scoreThreshold,
+              targetUri: null,
+            },
+          );
+        } catch (error) {
+          api.logger.warn?.(
+            `openclaw-openviking-plugin: memory_recall failed: ${String(error)}`,
+          );
+          return textToolResult("OpenViking memory recall failed.", {
+            error: String(error),
+          });
+        }
+      },
+    }));
+
+    api.registerTool((ctx: ToolContext) => ({
+      name: "memory_store",
+      label: "Memory Store (OpenViking)",
+      description:
+        "Write text into an OpenViking session and run memory extraction immediately.",
+      parameters: Type.Object({
+        text: Type.String({ description: "Text to store" }),
+        role: Type.Optional(Type.String({ description: "Message role, defaults to user" })),
+        sessionId: Type.Optional(
+          Type.String({
+            description: "Optional existing session ID. A temporary session ID is generated if omitted",
+          }),
+        ),
+      }),
+      async execute(_toolCallId: string, params: Record<string, unknown>): Promise<ToolResult> {
+        const text = normalizeNonEmptyString(params.text);
+        if (!text) {
+          return textToolResult("Provide non-empty text to store.", {
+            error: "missing_text",
+          });
+        }
+
+        const role = normalizeNonEmptyString(params.role) || "user";
+        const providedSessionId = normalizeNonEmptyString(params.sessionId);
+        const sessionId =
+          providedSessionId ||
+          `memory-store-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const usedTempSession = !providedSessionId;
+        const agentId = resolveToolAgentId(ctx);
+
+        try {
+          await client.addSessionMessage(sessionId, role, text, agentId);
+          const commitResult = await client.commitSession(sessionId, {
+            wait: true,
+            agentId,
+          });
+          const memoriesCount = totalCommitMemories(commitResult);
+
+          if (commitResult.status === "failed") {
+            return textToolResult(
+              `Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}`,
+              {
+                action: "failed",
+                error: commitResult.error ?? "unknown",
+                sessionId,
+                status: commitResult.status,
+                usedTempSession,
+              },
+            );
+          }
+
+          if (commitResult.status === "timeout") {
+            return textToolResult(
+              `Memory extraction timed out for session ${sessionId}. It may still complete in the background (task_id=${commitResult.task_id ?? "none"}).`,
+              {
+                action: "timeout",
+                sessionId,
+                status: commitResult.status,
+                taskId: commitResult.task_id ?? null,
+                usedTempSession,
+              },
+            );
+          }
+
+          return textToolResult(
+            `Stored text in OpenViking session ${sessionId}. Commit completed with ${memoriesCount} extracted memories.`,
+            {
+              action: "stored",
+              archived: commitResult.archived ?? false,
+              memoriesCount,
+              sessionId,
+              status: commitResult.status,
+              usedTempSession,
+            },
+          );
+        } catch (error) {
+          api.logger.warn?.(
+            `openclaw-openviking-plugin: memory_store failed: ${String(error)}`,
+          );
+          return textToolResult("OpenViking memory store failed.", {
+            error: String(error),
+            sessionId,
+            usedTempSession,
+          });
+        }
+      },
+    }));
+
+    api.registerTool((ctx: ToolContext) => ({
+      name: "memory_forget",
+      label: "Memory Forget (OpenViking)",
+      description:
+        "Delete a memory by URI, or search for a strong match and delete it after confirmation.",
+      parameters: Type.Object({
+        uri: Type.Optional(Type.String({ description: "Exact memory URI to delete" })),
+        query: Type.Optional(
+          Type.String({ description: "Search query used to locate a memory before deletion" }),
+        ),
+        confirm: Type.Optional(
+          Type.Boolean({
+            description:
+              "Required when deleting based on a query match. The tool only auto-deletes a single strong match when confirm is true",
+          }),
+        ),
+      }),
+      async execute(_toolCallId: string, params: Record<string, unknown>): Promise<ToolResult> {
+        const uri = normalizeNonEmptyString(params.uri);
+        const query = normalizeNonEmptyString(params.query);
+        const confirm = params.confirm === true;
+        const agentId = resolveToolAgentId(ctx);
+
+        try {
+          if (uri) {
+            await client.delete(uri, agentId);
+            return textToolResult(`Forgotten: ${uri}`, {
+              action: "deleted",
+              uri,
+            });
+          }
+
+          if (!query) {
+            return textToolResult("Provide either uri or query.", {
+              error: "missing_uri_or_query",
+            });
+          }
+
+          const requestLimit = 20;
+          const [userSettled, agentSettled] = await Promise.allSettled([
+            client.find(query, USER_MEMORIES_URI, requestLimit, 0, agentId),
+            client.find(query, AGENT_MEMORIES_URI, requestLimit, 0, agentId),
+          ]);
+
+          if (userSettled.status === "rejected") {
+            api.logger.warn?.(
+              `openclaw-openviking-plugin: memory_forget user search failed: ${String(
+                userSettled.reason,
+              )}`,
+            );
+          }
+          if (agentSettled.status === "rejected") {
+            api.logger.warn?.(
+              `openclaw-openviking-plugin: memory_forget agent search failed: ${String(
+                agentSettled.reason,
+              )}`,
+            );
+          }
+          if (userSettled.status === "rejected" && agentSettled.status === "rejected") {
+            return textToolResult("OpenViking memory forget failed.", {
+              error: "both_searches_failed",
+            });
+          }
+
+          const candidates = selectToolMemories(
+            dedupeMemoriesByUri([
+              ...(unwrapFindResult(userSettled).memories ?? []),
+              ...(unwrapFindResult(agentSettled).memories ?? []),
+            ]),
+            {
+              limit: 5,
+              scoreThreshold: 0,
+            },
+          );
+
+          if (candidates.length === 0) {
+            return textToolResult("No matching OpenViking memories found.", {
+              action: "none",
+              query,
+            });
+          }
+
+          const top = candidates[0];
+          const topScore = clampScore(top.score);
+          if (candidates.length === 1 && topScore > 0.8 && confirm) {
+            await client.delete(top.uri, agentId);
+            return textToolResult(`Forgotten: ${top.uri}`, {
+              action: "deleted",
+              query,
+              score: topScore,
+              uri: top.uri,
+            });
+          }
+
+          const confirmationHint =
+            candidates.length === 1 && topScore > 0.8
+              ? "Strong match found. Re-run with confirm=true to delete it, or pass uri to delete directly."
+              : "Multiple or weak matches found. Pass uri to delete the intended memory.";
+
+          return textToolResult(
+            `${confirmationHint}\n\nCandidates:\n${formatMemoryLines(candidates)}`,
+            {
+              action: "candidates",
+              candidates,
+              confirm,
+              query,
+            },
+          );
+        } catch (error) {
+          api.logger.warn?.(
+            `openclaw-openviking-plugin: memory_forget failed: ${String(error)}`,
+          );
+          return textToolResult("OpenViking memory forget failed.", {
+            error: String(error),
+          });
+        }
+      },
+    }));
 
     api.on("before_prompt_build", async (event: BeforePromptBuildEvent, ctx: HookContext) => {
       const sessionId = normalizeNonEmptyString(ctx.sessionId);
@@ -291,6 +659,11 @@ function resolveRuntimeAgentId(ctx: HookContext): string | undefined {
   return normalizeNonEmptyString(ctx.agentId);
 }
 
+function resolveToolAgentId(ctx: ToolContext): string | undefined {
+  const sessionId = normalizeNonEmptyString(ctx.sessionId);
+  return sessionId || undefined;
+}
+
 function normalizeNonEmptyString(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
@@ -349,6 +722,56 @@ function dedupeMemoriesByUri(items: FindResultItem[]): FindResultItem[] {
     deduped.push(item);
   }
   return deduped;
+}
+
+function selectToolMemories(
+  items: FindResultItem[],
+  options: {
+    limit: number;
+    scoreThreshold: number;
+  },
+): FindResultItem[] {
+  const selected: FindResultItem[] = [];
+  for (const item of [...dedupeMemoriesByUri(items)].sort(
+    (a, b) => clampScore(b.score) - clampScore(a.score),
+  )) {
+    if (clampScore(item.score) < options.scoreThreshold) {
+      continue;
+    }
+    selected.push(item);
+    if (selected.length >= options.limit) {
+      break;
+    }
+  }
+  return selected;
+}
+
+function formatMemoryLines(memories: FindResultItem[]): string {
+  return memories
+    .map((item) => {
+      const summary = normalizeNonEmptyString(item.abstract) || normalizeNonEmptyString(item.overview);
+      const score = Math.round(clampScore(item.score) * 100);
+      if (summary) {
+        return `- [${score}%] ${item.uri}: ${summary}`;
+      }
+      return `- [${score}%] ${item.uri}`;
+    })
+    .join("\n");
+}
+
+function textToolResult(text: string, details?: Record<string, unknown>): ToolResult {
+  return {
+    content: [{ type: "text", text }],
+    details,
+  };
+}
+
+function totalCommitMemories(result: CommitSessionResult): number {
+  let total = 0;
+  for (const value of Object.values(result.memories_extracted ?? {})) {
+    total += typeof value === "number" && Number.isFinite(value) ? value : 0;
+  }
+  return total;
 }
 
 function clampScore(value: number | undefined): number {
