@@ -19,17 +19,33 @@ An [OpenClaw](https://openclaw.ai) plugin that integrates with [OpenViking](http
 
 ## Installation
 
+### Using `install.sh` (recommended)
+
 ```bash
-openclaw plugins install /path/to/openclaw-openviking-plugin
+git clone https://github.com/liushuangls/openclaw-openviking-plugin
+cd openclaw-openviking-plugin
+./install.sh
 ```
 
-Or copy the directory to `~/.openclaw/extensions/openclaw-openviking-plugin/`.
+The script copies plugin files, installs dependencies, updates `openclaw.json`, and restarts the gateway automatically. Re-running it on an already-installed plugin performs an **update** (syncs files + restarts, config unchanged).
+
+```bash
+# Custom OV server address
+OV_BASE_URL=http://192.168.1.100:1934 ./install.sh
+```
+
+### Manual
+
+Copy the directory to `~/.openclaw/extensions/openclaw-openviking-plugin/`, run `npm install --omit=dev` inside it, then add the plugin to `openclaw.json` (see Configuration below) and restart the gateway.
 
 ## Configuration
+
+Add to your `openclaw.json`:
 
 ```json
 {
   "plugins": {
+    "allow": ["openclaw-openviking-plugin"],
     "entries": {
       "openclaw-openviking-plugin": {
         "enabled": true,
@@ -50,6 +66,18 @@ Or copy the directory to `~/.openclaw/extensions/openclaw-openviking-plugin/`.
 }
 ```
 
+| Field | Default | Description |
+|---|---|---|
+| `baseUrl` | `http://127.0.0.1:1934` | OpenViking server URL |
+| `apiKey` | `""` | API key (if required) |
+| `autoRecall` | `true` | Inject relevant memories before each prompt |
+| `autoCapture` | `true` | Commit conversation turns to OV after each response |
+| `recallLimit` | `6` | Max memories to inject per turn |
+| `recallScoreThreshold` | `0.15` | Minimum relevance score (0–1) |
+| `recallTokenBudget` | `2000` | Max tokens for injected memory context |
+| `recallMaxContentChars` | `500` | Max characters per memory snippet |
+| `commitTokenThreshold` | `0` | Min tokens in a turn before committing (0 = always) |
+
 ## Testing
 
 ```bash
@@ -63,6 +91,10 @@ OV_BASE_URL=http://127.0.0.1:1934 npm run test:integration
 ```
 
 Integration tests skip automatically if the server is unreachable.
+
+## Coexistence with LCM
+
+This plugin uses **hooks only** (`before_prompt_build` + `agent_end`). It does not set `kind: "context-engine"` and does not occupy the exclusive context engine slot, so it runs alongside [lossless-claw](https://github.com/martian-engineering/lossless-claw) or any other context engine without conflict.
 
 ## License
 
