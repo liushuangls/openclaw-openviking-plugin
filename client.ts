@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export type FindResultItem = {
   uri: string;
   level?: number;
@@ -31,6 +33,9 @@ export type TaskResult = {
   error?: string;
 };
 
+type ScopeName = "user" | "agent";
+type RuntimeIdentity = { userId: string; agentId: string };
+
 export class OpenVikingRequestError extends Error {
   readonly status: number;
   readonly code?: string;
@@ -54,17 +59,29 @@ type CommitSessionOptions = {
 type OpenVikingClientOptions = {
   baseUrl: string;
   apiKey?: string;
+  agentId?: string;
   timeoutMs?: number;
 };
+
+const USER_STRUCTURE_DIRS = new Set(["memories"]);
+const AGENT_STRUCTURE_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
+
+function md5Short(input: string): string {
+  return createHash("md5").update(input).digest("hex").slice(0, 12);
+}
 
 export class OpenVikingClient {
   private readonly baseUrl: string;
   private readonly apiKey: string;
+  private readonly defaultAgentId: string;
   private readonly timeoutMs: number;
+  private spaceCache = new Map<string, Partial<Record<ScopeName, string>>>();
+  private identityCache = new Map<string, RuntimeIdentity>();
 
   constructor(options: OpenVikingClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.apiKey = options.apiKey?.trim() ?? "";
+    this.defaultAgentId = options.agentId?.trim() ?? "";
     this.timeoutMs = options.timeoutMs ?? 15_000;
   }
 
@@ -75,19 +92,135 @@ export class OpenVikingClient {
     scoreThreshold = 0,
     agentId?: string,
   ): Promise<FindResult> {
+    const normalizedUri = await this.normalizeTargetUri(targetUri, agentId);
+
     return this.request<FindResult>(
       "/api/v1/search/find",
       {
         method: "POST",
         body: JSON.stringify({
           query,
-          target_uri: targetUri,
+          target_uri: normalizedUri,
           limit,
           score_threshold: scoreThreshold,
         }),
       },
       agentId,
     );
+  }
+
+  private async ls(uri: string, agentId?: string): Promise<Array<Record<string, unknown>>> {
+    return this.request<Array<Record<string, unknown>>>(
+      `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`,
+      { method: "GET" },
+      agentId,
+    );
+  }
+
+  private async getRuntimeIdentity(agentId?: string): Promise<RuntimeIdentity> {
+    const effectiveAgentId = agentId?.trim() || this.defaultAgentId;
+    const cached = this.identityCache.get(effectiveAgentId);
+    if (cached) {
+      return cached;
+    }
+
+    const fallback: RuntimeIdentity = {
+      userId: "default",
+      agentId: effectiveAgentId || "default",
+    };
+
+    try {
+      const status = await this.request<{ user?: unknown }>(
+        "/api/v1/system/status",
+        { method: "GET" },
+        agentId,
+      );
+      const userId =
+        typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
+      const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId || "default" };
+      this.identityCache.set(effectiveAgentId, identity);
+      return identity;
+    } catch {
+      this.identityCache.set(effectiveAgentId, fallback);
+      return fallback;
+    }
+  }
+
+  private async resolveScopeSpace(scope: ScopeName, agentId?: string): Promise<string> {
+    const effectiveAgentId = agentId?.trim() || this.defaultAgentId;
+    const agentScopes = this.spaceCache.get(effectiveAgentId);
+    const cached = agentScopes?.[scope];
+    if (cached) {
+      return cached;
+    }
+
+    const identity = await this.getRuntimeIdentity(agentId);
+    const fallbackSpace =
+      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
+    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
+    const preferredSpace =
+      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
+
+    const saveSpace = (space: string) => {
+      const existing = this.spaceCache.get(effectiveAgentId) ?? {};
+      existing[scope] = space;
+      this.spaceCache.set(effectiveAgentId, existing);
+    };
+
+    try {
+      const entries = await this.ls(`viking://${scope}`, agentId);
+      const spaces = entries
+        .filter((entry) => entry?.isDir === true)
+        .map((entry) => (typeof entry.name === "string" ? entry.name.trim() : ""))
+        .filter((name) => name && !name.startsWith(".") && !reservedDirs.has(name));
+
+      if (spaces.length > 0) {
+        if (spaces.includes(preferredSpace)) {
+          saveSpace(preferredSpace);
+          return preferredSpace;
+        }
+        if (scope === "user" && spaces.includes("default")) {
+          saveSpace("default");
+          return "default";
+        }
+        if (spaces.length === 1) {
+          saveSpace(spaces[0]!);
+          return spaces[0]!;
+        }
+      }
+    } catch {
+      // Fall back to identity-derived space when listing fails.
+    }
+
+    saveSpace(fallbackSpace);
+    return fallbackSpace;
+  }
+
+  private async normalizeTargetUri(targetUri: string, agentId?: string): Promise<string> {
+    const trimmed = targetUri.trim().replace(/\/+$/, "");
+    const match = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
+    if (!match) {
+      return trimmed;
+    }
+
+    const scope = match[1] as ScopeName;
+    const rawRest = (match[2] ?? "").trim();
+    if (!rawRest) {
+      return trimmed;
+    }
+
+    const parts = rawRest.split("/").filter(Boolean);
+    if (parts.length === 0) {
+      return trimmed;
+    }
+
+    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
+    if (!reservedDirs.has(parts[0]!)) {
+      return trimmed;
+    }
+
+    const space = await this.resolveScopeSpace(scope, agentId);
+    return `viking://${scope}/${space}/${parts.join("/")}`;
   }
 
   async read(uri: string, agentId?: string): Promise<string> {
@@ -204,7 +337,7 @@ export class OpenVikingClient {
         headers.set("X-Api-Key", this.apiKey);
       }
 
-      const effectiveAgentId = agentId?.trim();
+      const effectiveAgentId = agentId?.trim() || this.defaultAgentId;
       if (effectiveAgentId) {
         headers.set("X-OpenViking-Agent", effectiveAgentId);
       }

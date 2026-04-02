@@ -23,13 +23,27 @@ describe("OpenVikingClient", () => {
   });
 
   it("find() sends the expected POST request and returns memories", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonResponse({
-        result: {
-          memories: [{ uri: "viking://user/memories/1", abstract: "Blue", score: 0.91 }],
-        },
-      }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          result: {
+            user: "default",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          result: [{ name: "default", isDir: true }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          result: {
+            memories: [{ uri: "viking://user/default/memories/1", abstract: "Blue", score: 0.91 }],
+          },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const client = new OpenVikingClient({
@@ -46,16 +60,26 @@ describe("OpenVikingClient", () => {
     );
 
     expect(result.memories).toEqual([
-      { uri: "viking://user/memories/1", abstract: "Blue", score: 0.91 },
+      { uri: "viking://user/default/memories/1", abstract: "Blue", score: 0.91 },
     ]);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [statusUrl, statusInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(statusUrl).toBe("http://ov.example/api/v1/system/status");
+    expect(statusInit.method).toBe("GET");
+    expect(getHeaders(statusInit).get("X-OpenViking-Agent")).toBe("agent-1");
+
+    const [lsUrl, lsInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(lsUrl).toBe("http://ov.example/api/v1/fs/ls?uri=viking%3A%2F%2Fuser&output=original");
+    expect(lsInit.method).toBe("GET");
+    expect(getHeaders(lsInit).get("X-OpenViking-Agent")).toBe("agent-1");
+
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(url).toBe("http://ov.example/api/v1/search/find");
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({
       query: "favorite color",
-      target_uri: "viking://user/memories",
+      target_uri: "viking://user/default/memories",
       limit: 5,
       score_threshold: 0.25,
     });
@@ -273,7 +297,7 @@ describe("OpenVikingClient", () => {
 
     const client = new OpenVikingClient({ baseUrl: "http://ov.example", apiKey: "   " });
 
-    await client.find("query", "viking://user/memories", 3, 0);
+    await client.find("query", "viking://user/default/memories", 3, 0);
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(getHeaders(init).has("X-Api-Key")).toBe(false);
