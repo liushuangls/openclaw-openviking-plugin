@@ -31,6 +31,20 @@ export type TaskResult = {
   error?: string;
 };
 
+export class OpenVikingRequestError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(status: number, message: string, code?: string) {
+    super(
+      `OpenViking request failed (status ${status}${code ? `, code ${code}` : ""}): ${message}`,
+    );
+    this.name = "OpenVikingRequestError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
 type CommitSessionOptions = {
   wait?: boolean;
   timeoutMs?: number;
@@ -77,11 +91,18 @@ export class OpenVikingClient {
   }
 
   async read(uri: string, agentId?: string): Promise<string> {
-    return this.request<string>(
-      `/api/v1/content/read?uri=${encodeURIComponent(uri)}`,
-      { method: "GET" },
-      agentId,
-    );
+    try {
+      return await this.request<string>(
+        `/api/v1/content/read?uri=${encodeURIComponent(uri)}`,
+        { method: "GET" },
+        agentId,
+      );
+    } catch (error) {
+      if (error instanceof OpenVikingRequestError && error.status === 404) {
+        return "";
+      }
+      throw error;
+    }
   }
 
   async addSessionMessage(
@@ -159,11 +180,18 @@ export class OpenVikingClient {
   }
 
   async delete(uri: string, agentId?: string): Promise<void> {
-    await this.request<void>(
-      `/api/v1/fs/delete?uri=${encodeURIComponent(uri)}`,
-      { method: "DELETE" },
-      agentId,
-    );
+    try {
+      await this.request<void>(
+        `/api/v1/fs/delete?uri=${encodeURIComponent(uri)}`,
+        { method: "DELETE" },
+        agentId,
+      );
+    } catch (error) {
+      if (error instanceof OpenVikingRequestError && error.status === 404) {
+        return;
+      }
+      throw error;
+    }
   }
 
   private async request<T>(path: string, init: RequestInit, agentId?: string): Promise<T> {
@@ -191,19 +219,24 @@ export class OpenVikingClient {
         signal: controller.signal,
       });
 
-      const payload = (await response.json().catch(() => ({}))) as {
-        status?: string;
-        result?: T;
-        error?: { code?: string; message?: string };
-      };
+      const payload = (await response.json().catch(() => undefined)) as
+        | {
+            status?: string;
+            result?: T;
+            error?: { code?: string; message?: string };
+          }
+        | undefined;
 
-      if (!response.ok || payload.status === "error") {
-        const code = payload.error?.code ? ` [${payload.error.code}]` : "";
-        const message = payload.error?.message ?? `HTTP ${response.status}`;
-        throw new Error(`OpenViking request failed${code}: ${message}`);
+      if (!response.ok || payload?.status === "error") {
+        const code = payload?.error?.code;
+        const message =
+          payload?.error?.message ??
+          response.statusText ??
+          `HTTP ${response.status}`;
+        throw new OpenVikingRequestError(response.status, message, code);
       }
 
-      return (payload.result ?? payload) as T;
+      return (payload?.result ?? payload) as T;
     } finally {
       clearTimeout(timer);
     }

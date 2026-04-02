@@ -7,6 +7,18 @@ import {
   type FindResult,
   type FindResultItem,
 } from "./client.js";
+import {
+  buildMemoryLinesWithBudget,
+  clampScore,
+  cleanupExpiredPrePromptCounts,
+  consumePrePromptCount,
+  dedupeMemoriesByUri,
+  estimateTokenCount,
+  formatMemoryLines,
+  rememberPrePromptCount,
+  selectToolMemories,
+  type PrePromptCountEntry,
+} from "./src/helpers.js";
 
 type HookContext = {
   agentId?: string;
@@ -85,12 +97,6 @@ type PluginConfig = {
   commitTokenThreshold: number;
 };
 
-type BuildMemoryLinesOptions = {
-  recallPreferAbstract: boolean;
-  recallMaxContentChars: number;
-  recallTokenBudget: number;
-};
-
 type CaptureMode = "semantic" | "keyword";
 
 type CapturedTurnMessage = {
@@ -113,6 +119,7 @@ const DEFAULT_CONFIG: PluginConfig = {
 const DEFAULT_CAPTURE_MODE: CaptureMode = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24_000;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
+const PRE_PROMPT_COUNT_TTL_MS = 30 * 60_000;
 const USER_MEMORIES_URI = "viking://user/memories";
 const AGENT_MEMORIES_URI = "viking://agent/memories";
 
@@ -127,7 +134,7 @@ export default definePluginEntry({
       baseUrl: cfg.baseUrl,
       apiKey: cfg.apiKey,
     });
-    const prePromptCounts = new Map<string, number>();
+    const prePromptCounts = new Map<string, PrePromptCountEntry>();
 
     api.registerTool((ctx: ToolContext) => ({
       name: "memory_recall",
@@ -466,8 +473,13 @@ export default definePluginEntry({
 
     api.on("before_prompt_build", async (event: BeforePromptBuildEvent, ctx: HookContext) => {
       const sessionId = normalizeNonEmptyString(ctx.sessionId);
-      if (sessionId && !prePromptCounts.has(sessionId)) {
-        prePromptCounts.set(sessionId, Array.isArray(event.messages) ? event.messages.length : 0);
+      cleanupExpiredPrePromptCounts(prePromptCounts, PRE_PROMPT_COUNT_TTL_MS);
+      if (sessionId) {
+        rememberPrePromptCount(
+          prePromptCounts,
+          sessionId,
+          Array.isArray(event.messages) ? event.messages.length : 0,
+        );
       }
 
       if (!cfg.autoRecall) {
@@ -554,8 +566,8 @@ export default definePluginEntry({
       }
 
       const messages = Array.isArray(event.messages) ? event.messages : [];
-      const recorded = prePromptCounts.get(sessionId);
-      prePromptCounts.delete(sessionId);
+      cleanupExpiredPrePromptCounts(prePromptCounts, PRE_PROMPT_COUNT_TTL_MS);
+      const recorded = consumePrePromptCount(prePromptCounts, sessionId);
       const preCount =
         recorded != null && recorded > 0
           ? recorded
@@ -711,54 +723,6 @@ function unwrapFindResult(result: PromiseSettledResult<FindResult>): FindResult 
   return result.status === "fulfilled" ? result.value : { memories: [] };
 }
 
-function dedupeMemoriesByUri(items: FindResultItem[]): FindResultItem[] {
-  const deduped: FindResultItem[] = [];
-  const seen = new Set<string>();
-  for (const item of items) {
-    if (!item?.uri || seen.has(item.uri)) {
-      continue;
-    }
-    seen.add(item.uri);
-    deduped.push(item);
-  }
-  return deduped;
-}
-
-function selectToolMemories(
-  items: FindResultItem[],
-  options: {
-    limit: number;
-    scoreThreshold: number;
-  },
-): FindResultItem[] {
-  const selected: FindResultItem[] = [];
-  for (const item of [...dedupeMemoriesByUri(items)].sort(
-    (a, b) => clampScore(b.score) - clampScore(a.score),
-  )) {
-    if (clampScore(item.score) < options.scoreThreshold) {
-      continue;
-    }
-    selected.push(item);
-    if (selected.length >= options.limit) {
-      break;
-    }
-  }
-  return selected;
-}
-
-function formatMemoryLines(memories: FindResultItem[]): string {
-  return memories
-    .map((item) => {
-      const summary = normalizeNonEmptyString(item.abstract) || normalizeNonEmptyString(item.overview);
-      const score = Math.round(clampScore(item.score) * 100);
-      if (summary) {
-        return `- [${score}%] ${item.uri}: ${summary}`;
-      }
-      return `- [${score}%] ${item.uri}`;
-    })
-    .join("\n");
-}
-
 function textToolResult(text: string, details?: Record<string, unknown>): ToolResult {
   return {
     content: [{ type: "text", text }],
@@ -772,13 +736,6 @@ function totalCommitMemories(result: CommitSessionResult): number {
     total += typeof value === "number" && Number.isFinite(value) ? value : 0;
   }
   return total;
-}
-
-function clampScore(value: number | undefined): number {
-  if (typeof value !== "number" || Number.isNaN(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(1, value));
 }
 
 function normalizeDedupeText(text: string): string {
@@ -965,72 +922,6 @@ function pickMemoriesForInjection(
     picked.push(item);
   }
   return picked;
-}
-
-function estimateTokenCount(text: string): number {
-  if (!text) {
-    return 0;
-  }
-  return Math.ceil(text.length / 4);
-}
-
-async function resolveMemoryContent(
-  item: FindResultItem,
-  readFn: (uri: string) => Promise<string>,
-  options: BuildMemoryLinesOptions,
-): Promise<string> {
-  let content: string;
-
-  if (options.recallPreferAbstract && item.abstract?.trim()) {
-    content = item.abstract.trim();
-  } else if (item.level === 2) {
-    try {
-      const fullContent = await readFn(item.uri);
-      content =
-        fullContent && typeof fullContent === "string" && fullContent.trim()
-          ? fullContent.trim()
-          : item.abstract?.trim() || item.uri;
-    } catch {
-      content = item.abstract?.trim() || item.uri;
-    }
-  } else {
-    content = item.abstract?.trim() || item.uri;
-  }
-
-  if (content.length > options.recallMaxContentChars) {
-    content = `${content.slice(0, options.recallMaxContentChars)}...`;
-  }
-
-  return content;
-}
-
-async function buildMemoryLinesWithBudget(
-  memories: FindResultItem[],
-  readFn: (uri: string) => Promise<string>,
-  options: BuildMemoryLinesOptions,
-): Promise<{ lines: string[]; estimatedTokens: number }> {
-  let budgetRemaining = options.recallTokenBudget;
-  const lines: string[] = [];
-  let totalTokens = 0;
-
-  for (const item of memories) {
-    if (budgetRemaining <= 0) {
-      break;
-    }
-
-    const content = await resolveMemoryContent(item, readFn, options);
-    const line = `- [${item.category ?? "memory"}] ${content}`;
-    const lineTokens = estimateTokenCount(line);
-    if (lineTokens > budgetRemaining && lines.length > 0) {
-      break;
-    }
-
-    lines.push(line);
-    totalTokens += lineTokens;
-    budgetRemaining -= lineTokens;
-  }
-
-  return { lines, estimatedTokens: totalTokens };
 }
 
 const MEMORY_TRIGGERS = [
