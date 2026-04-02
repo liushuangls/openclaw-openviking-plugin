@@ -19,7 +19,19 @@
 
 ## 安装
 
-### 使用 `install.sh`（推荐）
+### 通过 OpenClaw CLI（推荐）
+
+```bash
+openclaw plugins install openclaw-openviking-plugin
+```
+
+更新到最新版本：
+
+```bash
+openclaw plugins update openclaw-openviking-plugin
+```
+
+### 使用 `install.sh`（从源码安装）
 
 ```bash
 git clone https://github.com/liushuangls/openclaw-openviking-plugin
