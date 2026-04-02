@@ -696,8 +696,7 @@ function resolveRuntimeAgentId(ctx: HookContext): string | undefined {
 }
 
 function resolveToolAgentId(ctx: ToolContext): string | undefined {
-  const sessionId = normalizeNonEmptyString(ctx.sessionId);
-  return sessionId || undefined;
+  return normalizeNonEmptyString(ctx.agentId) || undefined;
 }
 
 function normalizeNonEmptyString(value: unknown): string {
