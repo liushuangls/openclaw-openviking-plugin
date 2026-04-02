@@ -112,7 +112,7 @@ const DEFAULT_CONFIG: PluginConfig = {
   recallScoreThreshold: 0.15,
   recallTokenBudget: 2_000,
   recallMaxContentChars: 500,
-  commitTokenThreshold: 0,
+  commitTokenThreshold: 20000,
 };
 
 const DEFAULT_CAPTURE_MODE: CaptureMode = "semantic";
