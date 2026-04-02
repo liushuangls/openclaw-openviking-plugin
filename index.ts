@@ -1,6 +1,5 @@
 // @ts-ignore OpenClaw provides this module at plugin runtime.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { Type } from "@sinclair/typebox";
 import {
   OpenVikingClient,
   type CommitSessionResult,
@@ -141,19 +140,29 @@ export default definePluginEntry({
       label: "Memory Recall (OpenViking)",
       description:
         "Search OpenViking long-term memories for relevant user facts, preferences, and prior decisions.",
-      parameters: Type.Object({
-        query: Type.String({ description: "Search query" }),
-        limit: Type.Optional(Type.Number({ description: "Maximum number of results to return" })),
-        scoreThreshold: Type.Optional(
-          Type.Number({ description: "Minimum score between 0 and 1" }),
-        ),
-        targetUri: Type.Optional(
-          Type.String({
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Search query",
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of results to return",
+          },
+          scoreThreshold: {
+            type: "number",
+            description: "Minimum score between 0 and 1",
+          },
+          targetUri: {
+            type: "string",
             description:
               "Optional search scope URI. Defaults to both viking://user/memories and viking://agent/memories",
-          }),
-        ),
-      }),
+          },
+        },
+        required: ["query"],
+      },
       async execute(_toolCallId: string, params: Record<string, unknown>): Promise<ToolResult> {
         const query = normalizeNonEmptyString(params.query);
         if (!query) {
@@ -269,15 +278,24 @@ export default definePluginEntry({
       label: "Memory Store (OpenViking)",
       description:
         "Write text into an OpenViking session and run memory extraction immediately.",
-      parameters: Type.Object({
-        text: Type.String({ description: "Text to store" }),
-        role: Type.Optional(Type.String({ description: "Message role, defaults to user" })),
-        sessionId: Type.Optional(
-          Type.String({
+      parameters: {
+        type: "object",
+        properties: {
+          text: {
+            type: "string",
+            description: "Text to store",
+          },
+          role: {
+            type: "string",
+            description: "Message role, defaults to user",
+          },
+          sessionId: {
+            type: "string",
             description: "Optional existing session ID. A temporary session ID is generated if omitted",
-          }),
-        ),
-      }),
+          },
+        },
+        required: ["text"],
+      },
       async execute(_toolCallId: string, params: Record<string, unknown>): Promise<ToolResult> {
         const text = normalizeNonEmptyString(params.text);
         if (!text) {
@@ -357,18 +375,24 @@ export default definePluginEntry({
       label: "Memory Forget (OpenViking)",
       description:
         "Delete a memory by URI, or search for a strong match and delete it after confirmation.",
-      parameters: Type.Object({
-        uri: Type.Optional(Type.String({ description: "Exact memory URI to delete" })),
-        query: Type.Optional(
-          Type.String({ description: "Search query used to locate a memory before deletion" }),
-        ),
-        confirm: Type.Optional(
-          Type.Boolean({
+      parameters: {
+        type: "object",
+        properties: {
+          uri: {
+            type: "string",
+            description: "Exact memory URI to delete",
+          },
+          query: {
+            type: "string",
+            description: "Search query used to locate a memory before deletion",
+          },
+          confirm: {
+            type: "boolean",
             description:
               "Required when deleting based on a query match. The tool only auto-deletes a single strong match when confirm is true",
-          }),
-        ),
-      }),
+          },
+        },
+      },
       async execute(_toolCallId: string, params: Record<string, unknown>): Promise<ToolResult> {
         const uri = normalizeNonEmptyString(params.uri);
         const query = normalizeNonEmptyString(params.query);

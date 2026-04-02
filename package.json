@@ -8,9 +8,7 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration"
   },
-  "dependencies": {
-    "@sinclair/typebox": "^0.34.41"
-  },
+  "dependencies": {},
   "files": [
     "client.ts",
     "index.ts",
