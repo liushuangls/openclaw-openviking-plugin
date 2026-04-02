@@ -8,7 +8,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/liushuangls/openclaw-openviking-plugin.git"
+    "url": "git+https://github.com/liushuangls/openclaw-openviking-plugin.git"
   },
   "homepage": "https://github.com/liushuangls/openclaw-openviking-plugin#readme",
   "keywords": [
@@ -38,7 +38,9 @@
     "vitest": "^3.2.4"
   },
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "compat": {
       "pluginApi": ">=2026.3.24-beta.2",
       "minGatewayVersion": "2026.3.24-beta.2"
