@@ -1,8 +1,8 @@
 # openclaw-openviking-plugin
 
-An [OpenClaw](https://openclaw.ai) plugin that integrates with [OpenViking](https://github.com/volcengine/openviking) for long-term memory.
-
 [中文文档](./README_CN.md)
+
+An [OpenClaw](https://openclaw.ai) plugin that integrates with [OpenViking](https://github.com/volcengine/openviking) for long-term memory.
 
 **Hook-only** — does not register as a context engine. Works alongside LCM or any other context engine without conflict.
 
