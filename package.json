@@ -1,21 +1,38 @@
 {
   "name": "openclaw-openviking-plugin",
   "version": "0.1.0",
+  "description": "OpenClaw plugin for long-term memory via OpenViking. Hook-only design, works alongside LCM without conflict.",
   "type": "module",
   "main": "./index.ts",
+  "author": "liushuangls",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liushuangls/openclaw-openviking-plugin.git"
+  },
+  "homepage": "https://github.com/liushuangls/openclaw-openviking-plugin#readme",
+  "keywords": [
+    "openclaw",
+    "openviking",
+    "plugin",
+    "memory",
+    "ai-agent",
+    "long-term-memory"
+  ],
+  "files": [
+    "client.ts",
+    "index.ts",
+    "src/",
+    "openclaw.plugin.json",
+    "README.md",
+    "README_CN.md"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration"
   },
   "dependencies": {},
-  "files": [
-    "client.ts",
-    "index.ts",
-    "src/",
-    "openclaw.plugin.json",
-    "README.md"
-  ],
   "devDependencies": {
     "@vitest/coverage-v8": "^3.2.4",
     "vitest": "^3.2.4"
