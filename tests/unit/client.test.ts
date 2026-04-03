@@ -302,4 +302,28 @@ describe("OpenVikingClient", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(getHeaders(init).has("X-Api-Key")).toBe(false);
   });
+
+  it("find() uses target_uris (array) not target_uri (string)", async () => {
+    // Regression: OV API ignores singular target_uri, returning empty results.
+    // Must use target_uris (plural array) for correct scoped search.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ result: { user: "default" } }))
+      .mockResolvedValueOnce(jsonResponse({ result: [{ name: "default", isDir: true }] }))
+      .mockResolvedValueOnce(
+        jsonResponse({ result: { memories: [{ uri: "viking://user/default/memories/1", abstract: "test", score: 0.9 }] } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient({ baseUrl: "http://ov.example" });
+    await client.find("test query", "viking://user/memories", 10, 0.5);
+
+    const body = JSON.parse(String((fetchMock.mock.calls[2] as [string, RequestInit])[1].body));
+    // Must be array
+    expect(body.target_uris).toBeDefined();
+    expect(Array.isArray(body.target_uris)).toBe(true);
+    expect(body.target_uris.length).toBeGreaterThan(0);
+    // Must NOT have singular form
+    expect(body.target_uri).toBeUndefined();
+  });
 });

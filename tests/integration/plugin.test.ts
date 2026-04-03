@@ -165,4 +165,31 @@ describe("OpenVikingClient integration", () => {
 
     expect(result.memories?.length ?? 0).toBeGreaterThan(0);
   }, COMMIT_TIMEOUT_MS + 10_000);
+
+  integrationTest(
+    "find() uses target_uris array for scoped search (regression)",
+    async () => {
+      const client = new OpenVikingClient({ baseUrl: OV_BASE_URL });
+
+      // Make a real find call — this exercises the target_uris (array) code path
+      const result = await client.find(
+        "晚饭吃什么好",
+        "viking://user/memories",
+        6,
+        0,
+        TEST_AGENT,
+      );
+
+      // With target_uris array, OV should return scoped results
+      // (not empty/unrelated results that happen with singular target_uri)
+      expect(result.memories).toBeDefined();
+      expect(result.memories!.length).toBeGreaterThan(0);
+
+      // All results should have valid URIs (user or agent space)
+      for (const m of result.memories ?? []) {
+        expect(m.uri).toMatch(/viking:\/\/(user|agent)\//);
+      }
+    },
+    30_000,
+  );
 });
