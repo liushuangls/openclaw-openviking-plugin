@@ -118,7 +118,7 @@ describe("before_prompt_build autoRecall timeout", () => {
     const settled = vi.fn();
     void hookPromise.then(settled);
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(14_999);
     expect(settled).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
