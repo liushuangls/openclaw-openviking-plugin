@@ -533,7 +533,7 @@ export default definePluginEntry({
           return;
         }
 
-        const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+        const candidateLimit = cfg.recallLimit;
         api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] candidateLimit=${candidateLimit}, scoreThreshold=${cfg.recallScoreThreshold}, recallLimit=${cfg.recallLimit}`);
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const settledResults = await Promise.race([

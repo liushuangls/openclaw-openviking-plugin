@@ -97,20 +97,25 @@ export class OpenVikingClient {
     agentId?: string,
   ): Promise<FindResult> {
     const normalizedUri = await this.normalizeTargetUri(targetUri, agentId);
+    const requestBody = {
+      query,
+      target_uris: [normalizedUri],
+      limit,
+      score_threshold: scoreThreshold,
+    };
+    console.warn(`[OV-DEBUG] find request: ${JSON.stringify(requestBody).slice(0, 300)}`);
 
-    return this.request<FindResult>(
+    const result = await this.request<FindResult>(
       "/api/v1/search/find",
       {
         method: "POST",
-        body: JSON.stringify({
-          query,
-          target_uris: [normalizedUri],
-          limit,
-          score_threshold: scoreThreshold,
-        }),
+        body: JSON.stringify(requestBody),
       },
       agentId,
     );
+    const mems = result.memories ?? [];
+    console.warn(`[OV-DEBUG] find response: ${mems.length} memories, top3: ${mems.slice(0, 3).map(m => `${m.score?.toFixed(3)}|${(m.abstract || '').slice(0, 40)}`).join(' /// ')}`);
+    return result;
   }
 
   async getStatus(agentId?: string): Promise<SystemStatusResult> {
