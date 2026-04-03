@@ -1040,6 +1040,8 @@ const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memor
 const CONVERSATION_METADATA_BLOCK_RE =
   /(?:^|\n)\s*(?:Conversation info|Conversation metadata|会话信息|对话信息)\s*(?:\([^)]+\))?\s*:\s*```[\s\S]*?```/gi;
 const SENDER_METADATA_BLOCK_RE = /Sender\s*\([^)]*\)\s*:\s*```[\s\S]*?```/gi;
+const REPLIED_MESSAGE_BLOCK_RE =
+  /(?:^|\n)\s*Replied message[^\n]*:\s*```json[\s\S]*?```/gi;
 const FENCED_JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const METADATA_JSON_KEY_RE =
   /"(session|sessionid|sessionkey|conversationid|channel|sender|userid|agentid|timestamp|timezone)"\s*:/gi;
@@ -1072,6 +1074,7 @@ function sanitizeUserTextForCapture(text: string): string {
     .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
     .replace(SENDER_METADATA_BLOCK_RE, " ")
+    .replace(REPLIED_MESSAGE_BLOCK_RE, " ")
     .replace(FENCED_JSON_BLOCK_RE, (full, inner) =>
       looksLikeMetadataJsonBlock(String(inner ?? "")) ? " " : full,
     )
