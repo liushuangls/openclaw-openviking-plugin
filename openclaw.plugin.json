@@ -12,7 +12,8 @@
       "recallScoreThreshold": { "type": "number" },
       "recallTokenBudget": { "type": "number" },
       "recallMaxContentChars": { "type": "number" },
-      "commitTokenThreshold": { "type": "number" }
+      "commitTokenThreshold": { "type": "number" },
+      "captureSessionFilter": { "type": "array", "items": { "type": "string" } }
     }
   }
 }
