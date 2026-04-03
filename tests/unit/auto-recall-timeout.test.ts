@@ -32,6 +32,7 @@ function createPluginApiMock() {
       warn,
     },
     registerTool: vi.fn(),
+    registerCommand: vi.fn(),
     on: vi.fn((hookName: string, handler: BeforePromptBuildHandler) => {
       handlers.set(hookName, handler);
     }),

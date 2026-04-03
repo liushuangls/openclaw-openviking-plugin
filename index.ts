@@ -1,10 +1,13 @@
+import { readFileSync } from "node:fs";
 // @ts-ignore OpenClaw provides this module at plugin runtime.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginCommandDefinition, PluginCommandContext } from "openclaw/plugin-sdk";
 import {
   OpenVikingClient,
   type CommitSessionResult,
   type FindResult,
   type FindResultItem,
+  type SystemStatusResult,
 } from "./client.js";
 import {
   buildMemoryLinesWithBudget,
@@ -73,6 +76,7 @@ type OpenClawPluginApiLike = {
       opts?: { name?: string; names?: string[] },
     ): void;
   };
+  registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   on(
     hookName: "before_prompt_build",
     handler: (
@@ -106,6 +110,10 @@ type CapturedTurnMessage = {
   content: string;
 };
 
+type ParsedOpenVikingCommand =
+  | { kind: "status" }
+  | { kind: "help"; error?: string };
+
 const DEFAULT_CONFIG: PluginConfig = {
   baseUrl: "http://127.0.0.1:1933",
   apiKey: "",
@@ -127,6 +135,8 @@ const AUTO_RECALL_TIMEOUT_MS = 15_000;
 const PRE_PROMPT_COUNT_TTL_MS = 30 * 60_000;
 const USER_MEMORIES_URI = "viking://user/memories";
 const AGENT_MEMORIES_URI = "viking://agent/memories";
+const COMMAND_TIMEOUT_MS = 5_000;
+const PLUGIN_VERSION = readPluginVersion();
 
 export default definePluginEntry({
   id: "openclaw-openviking-plugin",
@@ -501,6 +511,28 @@ export default definePluginEntry({
       },
     }));
 
+    api.registerCommand({
+      name: "openviking",
+      nativeNames: { default: "ov" },
+      description: "OpenViking plugin status and diagnostics",
+      acceptsArgs: true,
+      handler: async (ctx: PluginCommandContext) => {
+        const parsed = parseOpenVikingCommand(ctx.args);
+        switch (parsed.kind) {
+          case "status":
+            return {
+              text: await buildOpenVikingStatusText({
+                cfg,
+                client,
+                ctx,
+              }),
+            };
+          case "help":
+            return { text: buildOpenVikingHelpText(parsed.error) };
+        }
+      },
+    });
+
     api.on("before_prompt_build", async (event: BeforePromptBuildEvent, ctx: HookContext) => {
       const sessionId = normalizeNonEmptyString(ctx.sessionId);
       cleanupExpiredPrePromptCounts(prePromptCounts, PRE_PROMPT_COUNT_TTL_MS);
@@ -731,15 +763,213 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown> | undefined):
 }
 
 function resolveRuntimeAgentId(ctx: HookContext): string | undefined {
-  return normalizeNonEmptyString(ctx.agentId);
+  return (
+    normalizeNonEmptyString(ctx.agentId) ||
+    extractAgentIdFromSessionKey(ctx.sessionKey)
+  );
 }
 
 function resolveToolAgentId(ctx: ToolContext): string | undefined {
-  return normalizeNonEmptyString(ctx.agentId) || undefined;
+  return (
+    normalizeNonEmptyString(ctx.agentId) ||
+    extractAgentIdFromSessionKey(ctx.sessionKey) ||
+    undefined
+  );
 }
 
 function normalizeNonEmptyString(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readPluginVersion(): string {
+  try {
+    const raw = readFileSync(new URL("./package.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return normalizeNonEmptyString(parsed.version) || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function splitCommandArgs(rawArgs: string | undefined): string[] {
+  return (rawArgs ?? "")
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function parseOpenVikingCommand(rawArgs: string | undefined): ParsedOpenVikingCommand {
+  const tokens = splitCommandArgs(rawArgs);
+  if (tokens.length === 0) {
+    return { kind: "status" };
+  }
+
+  const [head, ...rest] = tokens;
+  switch (head.toLowerCase()) {
+    case "status":
+      return rest.length === 0
+        ? { kind: "status" }
+        : { kind: "help", error: "`/ov status` does not accept extra arguments." };
+    case "help":
+      return rest.length === 0
+        ? { kind: "help" }
+        : { kind: "help", error: "`/ov help` does not accept extra arguments." };
+    default:
+      return {
+        kind: "help",
+        error: `Unknown subcommand \`${head}\`. Supported: status, help.`,
+      };
+  }
+}
+
+function buildOpenVikingHelpText(error?: string): string {
+  const lines = [
+    `🦞 OpenViking Plugin v${PLUGIN_VERSION}`,
+    "Help: /openviking help · Alias: /ov",
+    "",
+    "Commands",
+    "status: Show plugin status and diagnostics",
+    "help: Show this help",
+  ];
+
+  if (!error) {
+    return lines.join("\n");
+  }
+
+  return [`Error: ${error}`, "", ...lines].join("\n");
+}
+
+async function buildOpenVikingStatusText(params: {
+  cfg: PluginConfig;
+  client: OpenVikingClient;
+  ctx: PluginCommandContext;
+}): Promise<string> {
+  const agentId = extractAgentIdFromSessionKey(params.ctx.sessionKey);
+  const [serverStatus, userMemoryCount, agentMemoryCount] = await Promise.all([
+    getOpenVikingServerStatus(params.client, agentId),
+    getOpenVikingMemoryCount(params.client, USER_MEMORIES_URI, agentId),
+    getOpenVikingMemoryCount(params.client, AGENT_MEMORIES_URI, agentId),
+  ]);
+
+  return [
+    `🦞 OpenViking Plugin v${PLUGIN_VERSION}`,
+    "Help: /openviking help · Alias: /ov",
+    "",
+    "🔌 Plugin",
+    `autoRecall: ${formatYesNo(params.cfg.autoRecall)}`,
+    `autoCapture: ${formatYesNo(params.cfg.autoCapture)}`,
+    `captureSessionFilter: ${formatCaptureSessionFilter(params.cfg.captureSessionFilter)}`,
+    "",
+    "⚙️ Config",
+    `baseUrl: ${params.cfg.baseUrl}`,
+    `recallLimit: ${params.cfg.recallLimit}`,
+    `recallScoreThreshold: ${params.cfg.recallScoreThreshold}`,
+    `recallTokenBudget: ${params.cfg.recallTokenBudget}`,
+    `recallMaxContentChars: ${params.cfg.recallMaxContentChars}`,
+    `commitTokenThreshold: ${params.cfg.commitTokenThreshold}`,
+    "",
+    "🌐 OV Server",
+    `status: ${serverStatus.status}`,
+    `version: ${serverStatus.version}`,
+    "",
+    "🧠 Memories",
+    `user: ${userMemoryCount}`,
+    `agent: ${agentMemoryCount}`,
+  ].join("\n");
+}
+
+function formatYesNo(value: boolean): string {
+  return value ? "yes" : "no";
+}
+
+function formatCaptureSessionFilter(filters: string[]): string {
+  return filters.length > 0 ? filters.join(", ") : "none";
+}
+
+function extractAgentIdFromSessionKey(sessionKey: string | undefined): string | undefined {
+  const normalized = normalizeNonEmptyString(sessionKey);
+  if (!normalized) {
+    return undefined;
+  }
+
+  const match = normalized.match(/^agent:([^:]+):/);
+  return match?.[1] ? match[1] : undefined;
+}
+
+async function getOpenVikingServerStatus(
+  client: OpenVikingClient,
+  agentId?: string,
+): Promise<{ status: "online" | "offline"; version: string }> {
+  try {
+    const status = await withTimeout(
+      client.getStatus(agentId),
+      COMMAND_TIMEOUT_MS,
+      "system/status",
+    );
+    return {
+      status: "online",
+      version: resolveOpenVikingVersion(status),
+    };
+  } catch {
+    return {
+      status: "offline",
+      version: "unknown",
+    };
+  }
+}
+
+async function getOpenVikingMemoryCount(
+  client: OpenVikingClient,
+  targetUri: string,
+  agentId?: string,
+): Promise<string> {
+  try {
+    const entries = await withTimeout(client.ls(targetUri, agentId), COMMAND_TIMEOUT_MS, targetUri);
+    return `${entries.length} items`;
+  } catch {
+    return "unavailable";
+  }
+}
+
+function resolveOpenVikingVersion(status: SystemStatusResult): string {
+  const directVersion = normalizeNonEmptyString(status.version);
+  if (directVersion) {
+    return directVersion;
+  }
+
+  const nestedVersion = normalizeNonEmptyString(asRecord(asRecord(status)?.server)?.version);
+  if (nestedVersion) {
+    return nestedVersion;
+  }
+
+  const metaVersion = normalizeNonEmptyString(asRecord(asRecord(status)?.meta)?.version);
+  return metaVersion || "unknown";
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function toBoolean(value: unknown, fallback: boolean): boolean {

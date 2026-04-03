@@ -35,6 +35,8 @@ export type TaskResult = {
 
 export type SystemStatusResult = {
   user?: unknown;
+  version?: unknown;
+  [key: string]: unknown;
 };
 
 type ScopeName = "user" | "agent";
@@ -122,9 +124,10 @@ export class OpenVikingClient {
     );
   }
 
-  private async ls(uri: string, agentId?: string): Promise<Array<Record<string, unknown>>> {
+  async ls(uri: string, agentId?: string): Promise<Array<Record<string, unknown>>> {
+    const normalizedUri = await this.normalizeTargetUri(uri, agentId);
     return this.request<Array<Record<string, unknown>>>(
-      `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`,
+      `/api/v1/fs/ls?uri=${encodeURIComponent(normalizedUri)}&output=original`,
       { method: "GET" },
       agentId,
     );
