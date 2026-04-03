@@ -89,6 +89,7 @@ type PluginConfig = {
   apiKey: string;
   autoRecall: boolean;
   autoCapture: boolean;
+  captureSessionFilter: string[];
   recallLimit: number;
   recallScoreThreshold: number;
   recallTokenBudget: number;
@@ -108,6 +109,7 @@ const DEFAULT_CONFIG: PluginConfig = {
   apiKey: "",
   autoRecall: true,
   autoCapture: true,
+  captureSessionFilter: [],
   recallLimit: 6,
   recallScoreThreshold: 0.15,
   recallTokenBudget: 2_000,
@@ -584,6 +586,13 @@ export default definePluginEntry({
         return;
       }
 
+      if (cfg.captureSessionFilter.length > 0) {
+        const key = ctx.sessionKey ?? "";
+        if (!cfg.captureSessionFilter.some((filter) => key.includes(filter))) {
+          return;
+        }
+      }
+
       const sessionId = normalizeNonEmptyString(ctx.sessionId);
       if (!sessionId) {
         return;
@@ -663,6 +672,9 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown> | undefined):
     apiKey: normalizeNonEmptyString(raw.apiKey) || DEFAULT_CONFIG.apiKey,
     autoRecall: toBoolean(raw.autoRecall, DEFAULT_CONFIG.autoRecall),
     autoCapture: toBoolean(raw.autoCapture, DEFAULT_CONFIG.autoCapture),
+    captureSessionFilter: Array.isArray(raw.captureSessionFilter)
+      ? raw.captureSessionFilter.filter((value): value is string => typeof value === "string")
+      : [...DEFAULT_CONFIG.captureSessionFilter],
     recallLimit: clampInteger(raw.recallLimit, DEFAULT_CONFIG.recallLimit, 1, 50),
     recallScoreThreshold: clampNumber(
       raw.recallScoreThreshold,
