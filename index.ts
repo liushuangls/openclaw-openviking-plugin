@@ -107,7 +107,7 @@ type CapturedTurnMessage = {
 };
 
 const DEFAULT_CONFIG: PluginConfig = {
-  baseUrl: "http://127.0.0.1:1934",
+  baseUrl: "http://127.0.0.1:1933",
   apiKey: "",
   autoRecall: true,
   autoCapture: true,
@@ -122,6 +122,8 @@ const DEFAULT_CONFIG: PluginConfig = {
 const DEFAULT_CAPTURE_MODE: CaptureMode = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24_000;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
+const QUICK_RECALL_PRECHECK_TIMEOUT_MS = 1_500;
+const AUTO_RECALL_TIMEOUT_MS = 5_000;
 const PRE_PROMPT_COUNT_TTL_MS = 30 * 60_000;
 const USER_MEMORIES_URI = "viking://user/memories";
 const AGENT_MEMORIES_URI = "viking://agent/memories";
@@ -523,11 +525,35 @@ export default definePluginEntry({
       const runtimeAgentId = resolveRuntimeAgentId(ctx);
 
       try {
+        const ovReachable = await quickRecallPrecheck(client, runtimeAgentId);
+        if (!ovReachable) {
+          api.logger.warn?.("openclaw-openviking-plugin: OV unreachable, skipping autoRecall");
+          return;
+        }
+
         const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-        const [userSettled, agentSettled] = await Promise.allSettled([
-          client.find(queryText, USER_MEMORIES_URI, candidateLimit, 0, runtimeAgentId),
-          client.find(queryText, AGENT_MEMORIES_URI, candidateLimit, 0, runtimeAgentId),
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        const settledResults = await Promise.race([
+          Promise.allSettled([
+            client.find(queryText, USER_MEMORIES_URI, candidateLimit, 0, runtimeAgentId),
+            client.find(queryText, AGENT_MEMORIES_URI, candidateLimit, 0, runtimeAgentId),
+          ]).then((result) => ({
+            timedOut: false as const,
+            result,
+          })),
+          new Promise<{ timedOut: true }>((resolve) => {
+            timeoutId = setTimeout(() => resolve({ timedOut: true }), AUTO_RECALL_TIMEOUT_MS);
+          }),
         ]);
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
+        if (settledResults.timedOut) {
+          api.logger.warn?.("openclaw-openviking-plugin: autoRecall timed out, skipping");
+          return;
+        }
+
+        const [userSettled, agentSettled] = settledResults.result;
 
         const userResult = unwrapFindResult(userSettled);
         const agentResult = unwrapFindResult(agentSettled);
@@ -754,6 +780,29 @@ function clampInteger(value: unknown, fallback: number, min: number, max: number
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const numeric = toNumber(value, fallback);
   return Math.max(min, Math.min(max, numeric));
+}
+
+async function quickRecallPrecheck(
+  client: OpenVikingClient,
+  agentId?: string,
+): Promise<boolean> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      client
+        .getStatus(agentId)
+        .then(() => true)
+        .catch(() => false),
+      new Promise<boolean>((resolve) => {
+        timeoutId = setTimeout(() => resolve(false), QUICK_RECALL_PRECHECK_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function unwrapFindResult(result: PromiseSettledResult<FindResult>): FindResult {

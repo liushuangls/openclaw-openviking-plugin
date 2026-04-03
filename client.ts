@@ -33,6 +33,10 @@ export type TaskResult = {
   error?: string;
 };
 
+export type SystemStatusResult = {
+  user?: unknown;
+};
+
 type ScopeName = "user" | "agent";
 type RuntimeIdentity = { userId: string; agentId: string };
 
@@ -109,6 +113,14 @@ export class OpenVikingClient {
     );
   }
 
+  async getStatus(agentId?: string): Promise<SystemStatusResult> {
+    return this.request<SystemStatusResult>(
+      "/api/v1/system/status",
+      { method: "GET" },
+      agentId,
+    );
+  }
+
   private async ls(uri: string, agentId?: string): Promise<Array<Record<string, unknown>>> {
     return this.request<Array<Record<string, unknown>>>(
       `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`,
@@ -130,11 +142,7 @@ export class OpenVikingClient {
     };
 
     try {
-      const status = await this.request<{ user?: unknown }>(
-        "/api/v1/system/status",
-        { method: "GET" },
-        agentId,
-      );
+      const status = await this.getStatus(agentId);
       const userId =
         typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
       const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId || "default" };
