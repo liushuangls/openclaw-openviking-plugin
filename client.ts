@@ -103,9 +103,8 @@ export class OpenVikingClient {
       limit,
       score_threshold: scoreThreshold,
     };
-    console.warn(`[OV-DEBUG] find request: ${JSON.stringify(requestBody).slice(0, 300)}`);
 
-    const result = await this.request<FindResult>(
+    return this.request<FindResult>(
       "/api/v1/search/find",
       {
         method: "POST",
@@ -113,9 +112,6 @@ export class OpenVikingClient {
       },
       agentId,
     );
-    const mems = result.memories ?? [];
-    console.warn(`[OV-DEBUG] find response: ${mems.length} memories, top3: ${mems.slice(0, 3).map(m => `${m.score?.toFixed(3)}|${(m.abstract || '').slice(0, 40)}`).join(' /// ')}`);
-    return result;
   }
 
   async getStatus(agentId?: string): Promise<SystemStatusResult> {
