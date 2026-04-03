@@ -6,6 +6,8 @@ import {
   consumePrePromptCount,
   dedupeMemoriesByUri,
   formatMemoryLines,
+  matchesAnyPattern,
+  matchesGlobPattern,
   rememberPrePromptCount,
   selectToolMemories,
 } from "../../src/helpers.js";
@@ -54,6 +56,61 @@ describe("helpers", () => {
         "- [60%] viking://user/memories/2: Uses dark mode\n" +
         "- [40%] viking://user/memories/3",
     );
+  });
+
+  it("matches exact glob patterns without wildcards", () => {
+    expect(matchesGlobPattern("agent:main:cron:daily", "agent:main:cron:daily")).toBe(
+      true,
+    );
+    expect(matchesGlobPattern("agent:main:cron:daily", "agent:main:cron")).toBe(false);
+  });
+
+  it("matches non-colon segments with single star", () => {
+    expect(matchesGlobPattern("agent:main:cron", "agent:*:cron")).toBe(true);
+  });
+
+  it("does not let single star cross colons", () => {
+    expect(matchesGlobPattern("agent:main:cron:daily", "agent:*:daily")).toBe(false);
+  });
+
+  it("lets double star match across colon-separated segments", () => {
+    expect(matchesGlobPattern("agent:main:cron:daily:run:abc123", "agent:**")).toBe(
+      true,
+    );
+  });
+
+  it("matches real session key examples", () => {
+    expect(
+      matchesGlobPattern(
+        "agent:main:cron:daily:run:abc123",
+        "agent:*:cron:**",
+      ),
+    ).toBe(true);
+    expect(
+      matchesGlobPattern(
+        "agent:main:telegram:direct:5135833757",
+        "agent:*:cron:**",
+      ),
+    ).toBe(false);
+    expect(
+      matchesGlobPattern(
+        "agent:main:telegram:direct:5135833757",
+        "agent:*:telegram:direct:**",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches when any pattern matches", () => {
+    expect(
+      matchesAnyPattern("agent:main:telegram:direct:5135833757", [
+        "agent:*:cron:**",
+        "agent:*:telegram:direct:**",
+      ]),
+    ).toBe(true);
+  });
+
+  it("returns false for empty pattern arrays", () => {
+    expect(matchesAnyPattern("agent:main:cron:daily", [])).toBe(false);
   });
 
   it("builds memory lines within the token budget", async () => {

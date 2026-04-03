@@ -86,7 +86,7 @@ Add to your `openclaw.json`:
 | `apiKey` | `""` | API key (if required) |
 | `autoRecall` | `true` | Inject relevant memories before each prompt |
 | `autoCapture` | `true` | Commit conversation turns to OV after each response |
-| `captureSessionFilter` | `[]` | Only auto-capture when `sessionKey` includes any configured string, e.g. `["telegram:direct:"]` |
+| `captureSessionFilter` | `[]` | Only auto-capture when `sessionKey` fully matches any configured glob pattern, e.g. `["agent:*:telegram:direct:**"]` |
 | `recallLimit` | `6` | Max memories to inject per turn |
 | `recallScoreThreshold` | `0.15` | Minimum relevance score (0–1) |
 | `recallTokenBudget` | `2000` | Max tokens for injected memory context |

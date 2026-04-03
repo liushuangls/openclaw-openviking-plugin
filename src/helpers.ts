@@ -131,6 +131,27 @@ export function estimateTokenCount(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/**
+ * Match a session key against a glob pattern.
+ * Rules (same as lossless-claw ignoreSessionPatterns):
+ *   ** - matches any characters including ':'
+ *   *  - matches any characters except ':'
+ * Full-string match (anchored).
+ */
+export function matchesGlobPattern(sessionKey: string, pattern: string): boolean {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "\x00")
+    .replace(/\*/g, "[^:]*")
+    .replace(/\x00/g, ".*");
+  const regex = new RegExp(`^${escaped}$`);
+  return regex.test(sessionKey);
+}
+
+export function matchesAnyPattern(sessionKey: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => matchesGlobPattern(sessionKey, pattern));
+}
+
 export async function buildMemoryLinesWithBudget(
   memories: FindResultItem[],
   readFn: (uri: string) => Promise<string>,

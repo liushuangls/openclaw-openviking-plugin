@@ -14,6 +14,7 @@ import {
   dedupeMemoriesByUri,
   estimateTokenCount,
   formatMemoryLines,
+  matchesAnyPattern,
   rememberPrePromptCount,
   selectToolMemories,
   type PrePromptCountEntry,
@@ -22,6 +23,7 @@ import {
 type HookContext = {
   agentId?: string;
   sessionId?: string;
+  sessionKey?: string;
 };
 
 type PluginLoggerLike = {
@@ -588,7 +590,7 @@ export default definePluginEntry({
 
       if (cfg.captureSessionFilter.length > 0) {
         const key = ctx.sessionKey ?? "";
-        if (!cfg.captureSessionFilter.some((filter) => key.includes(filter))) {
+        if (!matchesAnyPattern(key, cfg.captureSessionFilter)) {
           return;
         }
       }
