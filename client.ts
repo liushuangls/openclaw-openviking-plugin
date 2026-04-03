@@ -104,7 +104,7 @@ export class OpenVikingClient {
         method: "POST",
         body: JSON.stringify({
           query,
-          target_uri: normalizedUri,
+          target_uris: [normalizedUri],
           limit,
           score_threshold: scoreThreshold,
         }),

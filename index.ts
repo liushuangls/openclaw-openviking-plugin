@@ -521,17 +521,20 @@ export default definePluginEntry({
       if (!queryText) {
         return;
       }
+      api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] queryText (first 200 chars): ${queryText.slice(0, 200)}`);
 
       const runtimeAgentId = resolveRuntimeAgentId(ctx);
 
       try {
         const ovReachable = await quickRecallPrecheck(client, runtimeAgentId);
+        api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] ovReachable=${ovReachable}, agentId=${runtimeAgentId}`);
         if (!ovReachable) {
           api.logger.warn?.("openclaw-openviking-plugin: OV unreachable, skipping autoRecall");
           return;
         }
 
         const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+        api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] candidateLimit=${candidateLimit}, scoreThreshold=${cfg.recallScoreThreshold}, recallLimit=${cfg.recallLimit}`);
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const settledResults = await Promise.race([
           Promise.allSettled([
@@ -572,12 +575,20 @@ export default definePluginEntry({
           ...(userResult.memories ?? []),
           ...(agentResult.memories ?? []),
         ]);
+        api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] merged=${merged.length}, user=${(userResult.memories??[]).length}, agent=${(agentResult.memories??[]).length}`);
+        if (merged.length > 0) {
+          api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] top3 merged: ${merged.slice(0,3).map(m => `${m.score?.toFixed(3)}|L${m.level}|${(m.abstract||'').slice(0,40)}`).join(' /// ')}`);
+        }
         const leafOnly = merged.filter((item) => item.level === 2);
         const processed = postProcessMemories(leafOnly, {
           limit: candidateLimit,
           scoreThreshold: cfg.recallScoreThreshold,
         });
         const selected = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+        api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] leafOnly=${leafOnly.length}, processed=${processed.length}, selected=${selected.length}`);
+        if (selected.length > 0) {
+          api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] selected: ${selected.slice(0,3).map(m => `${m.score?.toFixed(3)}|${(m.abstract||'').slice(0,40)}`).join(' /// ')}`);
+        }
         if (selected.length === 0) {
           return;
         }
@@ -591,17 +602,21 @@ export default definePluginEntry({
             recallTokenBudget: cfg.recallTokenBudget,
           },
         );
+        api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] lines=${lines.length}`);
+        if (lines.length > 0) {
+          api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] first 3 lines: ${lines.slice(0,3).join(' ||| ')}`);
+        }
         if (lines.length === 0) {
           return;
         }
 
-        return {
-          prependContext:
+        const prependContext =
             "<relevant-memories>\n" +
             "The following OpenViking memories may be relevant:\n" +
             `${lines.join("\n")}\n` +
-            "</relevant-memories>",
-        };
+            "</relevant-memories>";
+        api.logger.warn?.(`openclaw-openviking-plugin: [DEBUG] returning prependContext (${prependContext.length} chars)`);
+        return { prependContext };
       } catch (error) {
         api.logger.warn?.(
           `openclaw-openviking-plugin: autoRecall failed: ${String(error)}`,

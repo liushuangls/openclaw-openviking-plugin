@@ -79,7 +79,7 @@ describe("OpenVikingClient", () => {
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({
       query: "favorite color",
-      target_uri: "viking://user/default/memories",
+      target_uris: ["viking://user/default/memories"],
       limit: 5,
       score_threshold: 0.25,
     });
