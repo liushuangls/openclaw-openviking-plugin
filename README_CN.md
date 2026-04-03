@@ -86,6 +86,7 @@ OV_BASE_URL=http://192.168.1.100:1934 ./install.sh
 | `apiKey` | `""` | API Key（按需填写） |
 | `autoRecall` | `true` | 每次 prompt 前自动召回相关记忆 |
 | `autoCapture` | `true` | 每轮对话结束后自动提交并提取记忆 |
+| `captureSessionFilter` | `[]` | 仅当 `sessionKey` 完整匹配任一已配置的 glob 模式时才自动捕获，例如 `["agent:*:telegram:direct:**"]` |
 | `recallLimit` | `6` | 单次最多注入的记忆条数 |
 | `recallScoreThreshold` | `0.15` | 最低相关性分数（0–1） |
 | `recallTokenBudget` | `2000` | 注入记忆的最大 token 数 |
