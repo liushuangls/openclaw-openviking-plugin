@@ -82,15 +82,22 @@ describe("/ov command", () => {
   });
 
   it("shows plugin, config, server, and memory status when OV is online", async () => {
-    vi.spyOn(OpenVikingClient.prototype, "getStatus").mockResolvedValue({
-      user: "default",
-      version: "0.9.1",
+    vi.spyOn(OpenVikingClient.prototype, "getHealth").mockResolvedValue({
+      healthy: true,
+      version: "v0.3.1",
     });
     vi.spyOn(OpenVikingClient.prototype, "ls")
-      .mockResolvedValueOnce([{ name: "u1" }, { name: "u2" }])
+      .mockResolvedValueOnce([{ name: "u1" }, { name: "nested", isDir: true }])
+      .mockResolvedValueOnce([{ name: "u2" }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
         { name: "a1" },
+      ])
+      .mockResolvedValueOnce([
+        { name: "ignored", isDir: true },
         { name: "a2" },
+      ])
+      .mockResolvedValueOnce([
         { name: "a3" },
       ]);
 
@@ -125,26 +132,39 @@ describe("/ov command", () => {
     expect(result.text).toContain("recallMaxContentChars: 777");
     expect(result.text).toContain("commitTokenThreshold: 8888");
     expect(result.text).toContain("status: online");
-    expect(result.text).toContain("version: 0.9.1");
+    expect(result.text).toContain("version: v0.3.1");
     expect(result.text).toContain("user: 2 items");
     expect(result.text).toContain("agent: 3 items");
   });
 
+  it("shows version n/a when OV health does not provide it", async () => {
+    vi.spyOn(OpenVikingClient.prototype, "getHealth").mockResolvedValue({
+      healthy: true,
+    });
+    vi.spyOn(OpenVikingClient.prototype, "ls").mockRejectedValue(new Error("missing"));
+
+    const command = registerCommand();
+    const result = await command.handler(createBaseCommandContext());
+
+    expect(result.text).toContain("status: online");
+    expect(result.text).toContain("version: n/a");
+  });
+
   it("shows offline server status and unavailable memory counts when OV calls fail", async () => {
-    vi.spyOn(OpenVikingClient.prototype, "getStatus").mockRejectedValue(new Error("offline"));
+    vi.spyOn(OpenVikingClient.prototype, "getHealth").mockRejectedValue(new Error("offline"));
     vi.spyOn(OpenVikingClient.prototype, "ls").mockRejectedValue(new Error("offline"));
 
     const command = registerCommand();
     const result = await command.handler(createBaseCommandContext());
 
     expect(result.text).toContain("status: offline");
-    expect(result.text).toContain("version: unknown");
+    expect(result.text).toContain("version: n/a");
     expect(result.text).toContain("user: unavailable");
     expect(result.text).toContain("agent: unavailable");
   });
 
   it("shows help without calling OV", async () => {
-    const getStatusSpy = vi.spyOn(OpenVikingClient.prototype, "getStatus");
+    const getHealthSpy = vi.spyOn(OpenVikingClient.prototype, "getHealth");
     const lsSpy = vi.spyOn(OpenVikingClient.prototype, "ls");
 
     const command = registerCommand();
@@ -159,7 +179,7 @@ describe("/ov command", () => {
     expect(result.text).toContain("Commands");
     expect(result.text).toContain("status: Show plugin status and diagnostics");
     expect(result.text).toContain("help: Show this help");
-    expect(getStatusSpy).not.toHaveBeenCalled();
+    expect(getHealthSpy).not.toHaveBeenCalled();
     expect(lsSpy).not.toHaveBeenCalled();
   });
 });

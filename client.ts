@@ -124,6 +124,24 @@ export class OpenVikingClient {
     );
   }
 
+  async getHealth(): Promise<{ healthy: boolean; version?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/health`, {
+        method: "GET",
+        headers: this.buildHeaders(),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      if (!res.ok) return { healthy: false };
+      const data = (await res.json()) as Record<string, unknown>;
+      return {
+        healthy: data.healthy === true,
+        version: typeof data.version === "string" ? data.version : undefined,
+      };
+    } catch {
+      return { healthy: false };
+    }
+  }
+
   async ls(uri: string, agentId?: string): Promise<Array<Record<string, unknown>>> {
     const normalizedUri = await this.normalizeTargetUri(uri, agentId);
     return this.request<Array<Record<string, unknown>>>(

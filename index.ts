@@ -4,6 +4,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginCommandDefinition, PluginCommandContext } from "openclaw/plugin-sdk";
 import {
   OpenVikingClient,
+  OpenVikingRequestError,
   type CommitSessionResult,
   type FindResult,
   type FindResultItem,
@@ -905,37 +906,60 @@ function extractAgentIdFromSessionKey(sessionKey: string | undefined): string | 
 
 async function getOpenVikingServerStatus(
   client: OpenVikingClient,
-  agentId?: string,
 ): Promise<{ status: "online" | "offline"; version: string }> {
   try {
-    const status = await withTimeout(
-      client.getStatus(agentId),
+    const health = await withTimeout(
+      client.getHealth(),
       COMMAND_TIMEOUT_MS,
-      "system/status",
+      "health",
     );
-    return {
-      status: "online",
-      version: resolveOpenVikingVersion(status),
-    };
+    if (health.healthy) {
+      return {
+        status: "online",
+        version: health.version || "n/a",
+      };
+    }
+    return { status: "offline", version: "n/a" };
   } catch {
-    return {
-      status: "offline",
-      version: "unknown",
-    };
+    return { status: "offline", version: "n/a" };
   }
 }
 
 async function getOpenVikingMemoryCount(
   client: OpenVikingClient,
-  targetUri: string,
+  baseUri: string,
   agentId?: string,
 ): Promise<string> {
   try {
-    const entries = await withTimeout(client.ls(targetUri, agentId), COMMAND_TIMEOUT_MS, targetUri);
-    return `${entries.length} items`;
+    const total = await countMemories(client, baseUri, agentId);
+    return `${total} items`;
   } catch {
     return "unavailable";
   }
+}
+
+async function countMemories(
+  client: OpenVikingClient,
+  baseUri: string,
+  agentId?: string,
+): Promise<number> {
+  const subDirs = ["entities", "events", "preferences"];
+  let total = 0;
+
+  for (const dir of subDirs) {
+    try {
+      const uri = `${baseUri}/${dir}`;
+      const items = await withTimeout(client.ls(uri, agentId), COMMAND_TIMEOUT_MS, uri);
+      total += items.filter((item) => !(item as Record<string, unknown>).isDir).length;
+    } catch (error) {
+      if (error instanceof OpenVikingRequestError && error.status === 404) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return total;
 }
 
 function resolveOpenVikingVersion(status: SystemStatusResult): string {
@@ -950,7 +974,7 @@ function resolveOpenVikingVersion(status: SystemStatusResult): string {
   }
 
   const metaVersion = normalizeNonEmptyString(asRecord(asRecord(status)?.meta)?.version);
-  return metaVersion || "unknown";
+  return metaVersion || "n/a";
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
