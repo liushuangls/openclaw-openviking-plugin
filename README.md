@@ -14,6 +14,17 @@ An [OpenClaw](https://openclaw.ai) plugin that integrates with [OpenViking](http
 - **memory_store** tool — model-triggered memory write
 - **memory_forget** tool — model-triggered memory deletion
 
+## Slash Commands
+
+- `/ov`, `/openviking`, or explicit `/ov status` — show plugin status and diagnostics
+- Status output includes:
+  - **Plugin** — `autoRecall`, `autoCapture`, `captureSessionFilter`
+  - **Config** — `baseUrl` and recall/capture limits
+  - **OV Server** — server reachability and version
+  - **Queue** — local OpenViking queue counts by status (shown when the OV server is local)
+  - **Memories** — user/agent memory counts broken down by subdirectory
+- `/ov help` — show command help
+
 ## Requirements
 
 - OpenClaw gateway

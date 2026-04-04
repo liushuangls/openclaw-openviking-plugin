@@ -12,6 +12,17 @@
 - **memory_store** 工具 — 模型主动写入记忆
 - **memory_forget** 工具 — 模型主动删除记忆
 
+## 命令
+
+- `/ov`、`/openviking`，或显式 `/ov status` — 查看插件状态和诊断信息
+- 状态输出包含：
+  - **Plugin** — `autoRecall`、`autoCapture`、`captureSessionFilter`
+  - **Config** — `baseUrl` 以及 recall/capture 相关阈值与限制
+  - **OV Server** — 服务可达性与版本号
+  - **Queue** — 本地 OpenViking 队列按状态统计（仅在 OV server 为本地地址时显示）
+  - **Memories** — user/agent 记忆按子目录细分统计
+- `/ov help` — 查看命令帮助
+
 ## 依赖
 
 - OpenClaw gateway
