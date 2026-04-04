@@ -126,9 +126,11 @@ export class OpenVikingClient {
 
   async getHealth(): Promise<{ healthy: boolean; version?: string }> {
     try {
+      const headers = new Headers();
+      if (this.apiKey) headers.set("X-Api-Key", this.apiKey);
       const res = await fetch(`${this.baseUrl}/health`, {
         method: "GET",
-        headers: this.buildHeaders(),
+        headers,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
       if (!res.ok) return { healthy: false };

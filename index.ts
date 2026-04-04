@@ -943,9 +943,14 @@ async function countMemories(
   baseUri: string,
   agentId?: string,
 ): Promise<number> {
-  const subDirs = ["entities", "events", "preferences"];
-  let total = 0;
+  // Discover subdirectories dynamically (user: entities/events/preferences, agent: cases/patterns)
+  const topLevel = await withTimeout(client.ls(baseUri, agentId), COMMAND_TIMEOUT_MS, baseUri);
+  const subDirs = topLevel
+    .filter((item) => (item as Record<string, unknown>).isDir)
+    .map((item) => (item as Record<string, unknown>).name as string)
+    .filter(Boolean);
 
+  let total = 0;
   for (const dir of subDirs) {
     try {
       const uri = `${baseUri}/${dir}`;

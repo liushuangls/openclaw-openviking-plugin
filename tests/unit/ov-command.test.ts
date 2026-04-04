@@ -86,20 +86,19 @@ describe("/ov command", () => {
       healthy: true,
       version: "v0.3.1",
     });
-    vi.spyOn(OpenVikingClient.prototype, "ls")
-      .mockResolvedValueOnce([{ name: "u1" }, { name: "nested", isDir: true }])
-      .mockResolvedValueOnce([{ name: "u2" }])
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([
-        { name: "a1" },
-      ])
-      .mockResolvedValueOnce([
-        { name: "ignored", isDir: true },
-        { name: "a2" },
-      ])
-      .mockResolvedValueOnce([
-        { name: "a3" },
-      ]);
+    vi.spyOn(OpenVikingClient.prototype, "ls").mockImplementation((uri: string) => {
+      if (uri.includes("/user/") && !uri.match(/\/(entities|events|preferences|cases|patterns)$/)) {
+        return Promise.resolve([{ name: "entities", isDir: true }, { name: "events", isDir: true }]);
+      }
+      if (uri.endsWith("/entities")) return Promise.resolve([{ name: "u1" }]);
+      if (uri.endsWith("/events")) return Promise.resolve([{ name: "u2" }]);
+      if (uri.includes("/agent/") && !uri.match(/\/(entities|events|preferences|cases|patterns)$/)) {
+        return Promise.resolve([{ name: "cases", isDir: true }, { name: "patterns", isDir: true }]);
+      }
+      if (uri.endsWith("/cases")) return Promise.resolve([{ name: "a1" }, { name: "a2" }]);
+      if (uri.endsWith("/patterns")) return Promise.resolve([{ name: "a3" }]);
+      return Promise.resolve([]);
+    });
 
     const command = registerCommand({
       baseUrl: "http://ov.example",
