@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { definePluginEntryMock, execSyncMock } = vi.hoisted(() => ({
@@ -15,6 +16,9 @@ vi.mock("node:child_process", () => ({
 
 const { OpenVikingClient } = await import("../../client.js");
 const { default: plugin } = await import("../../index.ts");
+const { version: pluginVersion } = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+) as { version: string };
 
 type CommandHandler = (ctx: {
   args?: string;
@@ -129,7 +133,7 @@ describe("/ov command", () => {
       }),
     );
 
-    expect(result.text).toContain("🦞 OpenViking Plugin v0.1.3");
+    expect(result.text).toContain(`🦞 OpenViking Plugin v${pluginVersion}`);
     expect(result.text).toContain("Help: /openviking help · Alias: /ov");
     expect(result.text).toContain("autoRecall: no");
     expect(result.text).toContain("autoCapture: yes");
@@ -218,7 +222,7 @@ describe("/ov command", () => {
       }),
     );
 
-    expect(result.text).toContain("🦞 OpenViking Plugin v0.1.3");
+    expect(result.text).toContain(`🦞 OpenViking Plugin v${pluginVersion}`);
     expect(result.text).toContain("Commands");
     expect(result.text).toContain("status: Show plugin status and diagnostics");
     expect(result.text).toContain("help: Show this help");
