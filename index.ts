@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 // @ts-ignore OpenClaw provides this module at plugin runtime.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -136,6 +137,7 @@ const AUTO_RECALL_TIMEOUT_MS = 15_000;
 const PRE_PROMPT_COUNT_TTL_MS = 30 * 60_000;
 const USER_MEMORIES_URI = "viking://user/memories";
 const AGENT_MEMORIES_URI = "viking://agent/memories";
+const OPENVIKING_QUEUE_DB_PATH = "/home/liushuang/docker/openviking/data/_system/queue/queue.db";
 const COMMAND_TIMEOUT_MS = 5_000;
 const PLUGIN_VERSION = readPluginVersion();
 
@@ -853,13 +855,14 @@ async function buildOpenVikingStatusText(params: {
   ctx: PluginCommandContext;
 }): Promise<string> {
   const agentId = extractAgentIdFromSessionKey(params.ctx.sessionKey);
-  const [serverStatus, userMemoryCount, agentMemoryCount] = await Promise.all([
+  const [serverStatus, queueStatus, userMemoryBreakdown, agentMemoryBreakdown] = await Promise.all([
     getOpenVikingServerStatus(params.client, agentId),
-    getOpenVikingMemoryCount(params.client, USER_MEMORIES_URI, agentId),
-    getOpenVikingMemoryCount(params.client, AGENT_MEMORIES_URI, agentId),
+    getOpenVikingQueueStatus(params.cfg),
+    getOpenVikingMemoryBreakdown(params.client, USER_MEMORIES_URI, agentId),
+    getOpenVikingMemoryBreakdown(params.client, AGENT_MEMORIES_URI, agentId),
   ]);
 
-  return [
+  const lines = [
     `🦞 OpenViking Plugin v${PLUGIN_VERSION}`,
     "Help: /openviking help · Alias: /ov",
     "",
@@ -879,11 +882,30 @@ async function buildOpenVikingStatusText(params: {
     "🌐 OV Server",
     `status: ${serverStatus.status}`,
     `version: ${serverStatus.version}`,
+  ];
+
+  if (queueStatus !== null) {
+    lines.push("", "📬 Queue");
+    const entries = Object.entries(queueStatus);
+    if (entries.length === 0) {
+      lines.push("(empty)");
+    } else {
+      for (const [status, count] of entries) {
+        lines.push(`${status}: ${count}`);
+      }
+    }
+  }
+
+  lines.push(
     "",
     "🧠 Memories",
-    `user: ${userMemoryCount}`,
-    `agent: ${agentMemoryCount}`,
-  ].join("\n");
+    "user:",
+    ...formatOpenVikingBreakdownLines(userMemoryBreakdown),
+    "agent:",
+    ...formatOpenVikingBreakdownLines(agentMemoryBreakdown),
+  );
+
+  return lines.join("\n");
 }
 
 function formatYesNo(value: boolean): string {
@@ -925,46 +947,81 @@ async function getOpenVikingServerStatus(
   }
 }
 
-async function getOpenVikingMemoryCount(
+function formatOpenVikingBreakdownLines(entries: string[]): string[] {
+  return entries.map((entry) => `  ${entry}`);
+}
+
+async function getOpenVikingMemoryBreakdown(
   client: OpenVikingClient,
   baseUri: string,
   agentId?: string,
-): Promise<string> {
+): Promise<string[]> {
   try {
-    const total = await countMemories(client, baseUri, agentId);
-    return `${total} items`;
+    const topLevel = await withTimeout(client.ls(baseUri, agentId), COMMAND_TIMEOUT_MS, baseUri);
+    const subDirs = topLevel
+      .map((item) => asRecord(item))
+      .filter((item): item is Record<string, unknown> => Boolean(item?.isDir))
+      .map((item) => normalizeNonEmptyString(item.name))
+      .filter(Boolean);
+
+    const counts = await Promise.all(
+      subDirs.map(async (dir) => {
+        try {
+          const uri = `${baseUri}/${dir}`;
+          const items = await withTimeout(client.ls(uri, agentId), COMMAND_TIMEOUT_MS, uri);
+          const count = items.filter((item) => !asRecord(item)?.isDir).length;
+          return `${dir}: ${count}`;
+        } catch (error) {
+          if (error instanceof OpenVikingRequestError && error.status === 404) {
+            return null;
+          }
+          throw error;
+        }
+      }),
+    );
+
+    return counts.filter((item): item is string => Boolean(item));
   } catch {
-    return "unavailable";
+    return ["unavailable"];
   }
 }
 
-async function countMemories(
-  client: OpenVikingClient,
-  baseUri: string,
-  agentId?: string,
-): Promise<number> {
-  // Discover subdirectories dynamically (user: entities/events/preferences, agent: cases/patterns)
-  const topLevel = await withTimeout(client.ls(baseUri, agentId), COMMAND_TIMEOUT_MS, baseUri);
-  const subDirs = topLevel
-    .filter((item) => (item as Record<string, unknown>).isDir)
-    .map((item) => (item as Record<string, unknown>).name as string)
-    .filter(Boolean);
-
-  let total = 0;
-  for (const dir of subDirs) {
-    try {
-      const uri = `${baseUri}/${dir}`;
-      const items = await withTimeout(client.ls(uri, agentId), COMMAND_TIMEOUT_MS, uri);
-      total += items.filter((item) => !(item as Record<string, unknown>).isDir).length;
-    } catch (error) {
-      if (error instanceof OpenVikingRequestError && error.status === 404) {
-        continue;
-      }
-      throw error;
-    }
+async function getOpenVikingQueueStatus(
+  cfg: PluginConfig,
+): Promise<Record<string, number> | null> {
+  if (!isLocalOpenVikingBaseUrl(cfg.baseUrl)) {
+    return null;
   }
 
-  return total;
+  try {
+    const output = execSync(
+      `sqlite3 "${OPENVIKING_QUEUE_DB_PATH}" "SELECT status, count(*) FROM queue_messages GROUP BY status;"`,
+      { encoding: "utf8" },
+    );
+    const lines = output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const counts: Record<string, number> = {};
+
+    for (const line of lines) {
+      const [rawStatus, rawCount] = line.split("|");
+      const status = normalizeNonEmptyString(rawStatus);
+      const count = Number.parseInt(normalizeNonEmptyString(rawCount), 10);
+      if (status && Number.isFinite(count)) {
+        counts[status] = count;
+      }
+    }
+
+    return counts;
+  } catch {
+    return null;
+  }
+}
+
+function isLocalOpenVikingBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizeNonEmptyString(baseUrl).toLowerCase();
+  return normalized.includes("127.0.0.1") || normalized.includes("localhost");
 }
 
 function resolveOpenVikingVersion(status: SystemStatusResult): string {

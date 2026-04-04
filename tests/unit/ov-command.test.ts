@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { definePluginEntryMock } = vi.hoisted(() => ({
+const { definePluginEntryMock, execSyncMock } = vi.hoisted(() => ({
   definePluginEntryMock: vi.fn((entry: unknown) => entry),
+  execSyncMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/plugin-entry", () => ({
   definePluginEntry: definePluginEntryMock,
+}));
+
+vi.mock("node:child_process", () => ({
+  execSync: execSyncMock,
 }));
 
 const { OpenVikingClient } = await import("../../client.js");
@@ -77,6 +82,7 @@ function registerCommand(pluginConfig: Record<string, unknown> = {}) {
 
 describe("/ov command", () => {
   afterEach(() => {
+    execSyncMock.mockReset();
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
@@ -87,17 +93,21 @@ describe("/ov command", () => {
       version: "v0.3.1",
     });
     vi.spyOn(OpenVikingClient.prototype, "ls").mockImplementation((uri: string) => {
-      if (uri.includes("/user/") && !uri.match(/\/(entities|events|preferences|cases|patterns)$/)) {
-        return Promise.resolve([{ name: "entities", isDir: true }, { name: "events", isDir: true }]);
-      }
-      if (uri.endsWith("/entities")) return Promise.resolve([{ name: "u1" }]);
-      if (uri.endsWith("/events")) return Promise.resolve([{ name: "u2" }]);
-      if (uri.includes("/agent/") && !uri.match(/\/(entities|events|preferences|cases|patterns)$/)) {
-        return Promise.resolve([{ name: "cases", isDir: true }, { name: "patterns", isDir: true }]);
-      }
-      if (uri.endsWith("/cases")) return Promise.resolve([{ name: "a1" }, { name: "a2" }]);
-      if (uri.endsWith("/patterns")) return Promise.resolve([{ name: "a3" }]);
-      return Promise.resolve([]);
+      const responses: Record<string, Array<Record<string, unknown>>> = {
+        "viking://user/memories": [
+          { name: "entities", isDir: true },
+          { name: "events", isDir: true },
+        ],
+        "viking://user/memories/entities": [{ name: "u1" }],
+        "viking://user/memories/events": [{ name: "u2" }],
+        "viking://agent/memories": [
+          { name: "cases", isDir: true },
+          { name: "patterns", isDir: true },
+        ],
+        "viking://agent/memories/cases": [{ name: "a1" }, { name: "a2" }],
+        "viking://agent/memories/patterns": [{ name: "a3" }],
+      };
+      return Promise.resolve(responses[uri] ?? []);
     });
 
     const command = registerCommand({
@@ -132,8 +142,12 @@ describe("/ov command", () => {
     expect(result.text).toContain("commitTokenThreshold: 8888");
     expect(result.text).toContain("status: online");
     expect(result.text).toContain("version: v0.3.1");
-    expect(result.text).toContain("user: 2 items");
-    expect(result.text).toContain("agent: 3 items");
+    expect(result.text).toContain("user:");
+    expect(result.text).toContain("  entities: 1");
+    expect(result.text).toContain("  events: 1");
+    expect(result.text).toContain("agent:");
+    expect(result.text).toContain("  cases: 2");
+    expect(result.text).toContain("  patterns: 1");
   });
 
   it("shows version n/a when OV health does not provide it", async () => {
@@ -158,8 +172,38 @@ describe("/ov command", () => {
 
     expect(result.text).toContain("status: offline");
     expect(result.text).toContain("version: n/a");
-    expect(result.text).toContain("user: unavailable");
-    expect(result.text).toContain("agent: unavailable");
+    expect(result.text).toContain("user:\n  unavailable");
+    expect(result.text).toContain("agent:\n  unavailable");
+  });
+
+  it("shows queue section when OV is local", async () => {
+    vi.spyOn(OpenVikingClient.prototype, "getHealth").mockResolvedValue({
+      healthy: true,
+      version: "v0.3.1",
+    });
+    vi.spyOn(OpenVikingClient.prototype, "ls").mockImplementation((uri: string) => {
+      const responses: Record<string, Array<Record<string, unknown>>> = {
+        "viking://user/memories": [{ name: "entities", isDir: true }],
+        "viking://user/memories/entities": [{ name: "u1" }],
+        "viking://agent/memories": [{ name: "cases", isDir: true }],
+        "viking://agent/memories/cases": [{ name: "a1" }],
+      };
+      return Promise.resolve(responses[uri] ?? []);
+    });
+    execSyncMock.mockReturnValue("pending|144\nprocessing|2");
+
+    const command = registerCommand({
+      baseUrl: "http://127.0.0.1:1933",
+    });
+    const result = await command.handler(createBaseCommandContext());
+
+    expect(result.text).toContain("📬 Queue");
+    expect(result.text).toContain("pending: 144");
+    expect(result.text).toContain("processing: 2");
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'sqlite3 "/home/liushuang/docker/openviking/data/_system/queue/queue.db" "SELECT status, count(*) FROM queue_messages GROUP BY status;"',
+      { encoding: "utf8" },
+    );
   });
 
   it("shows help without calling OV", async () => {
