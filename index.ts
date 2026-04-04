@@ -1342,6 +1342,10 @@ const CONVERSATION_METADATA_BLOCK_RE =
 const SENDER_METADATA_BLOCK_RE = /Sender\s*\([^)]*\)\s*:\s*```[\s\S]*?```/gi;
 const REPLIED_MESSAGE_BLOCK_RE =
   /(?:^|\n)\s*Replied message[^\n]*:\s*```json[\s\S]*?```/gi;
+const HEARTBEAT_PROMPT_BLOCK_RE =
+  /(?:^|\n)\s*[^\n]*Read HEARTBEAT\.md if it exists[^\n]*(?:\n[^\S\n]*\S[^\n]*)*/gi;
+const HEARTBEAT_OK_LINE_RE = /(?:^|\n)\s*HEARTBEAT_OK\s*(?=\n|$)/g;
+const SYSTEM_EVENT_LINE_RE = /(?:^|\n)\s*(?:\[System:|System:)[^\n]*(?=\n|$)/g;
 const FENCED_JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const METADATA_JSON_KEY_RE =
   /"(session|sessionid|sessionkey|conversationid|channel|sender|userid|agentid|timestamp|timezone)"\s*:/gi;
@@ -1375,6 +1379,9 @@ function sanitizeUserTextForCapture(text: string): string {
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
     .replace(SENDER_METADATA_BLOCK_RE, " ")
     .replace(REPLIED_MESSAGE_BLOCK_RE, " ")
+    .replace(HEARTBEAT_PROMPT_BLOCK_RE, " ")
+    .replace(HEARTBEAT_OK_LINE_RE, " ")
+    .replace(SYSTEM_EVENT_LINE_RE, " ")
     .replace(FENCED_JSON_BLOCK_RE, (full, inner) =>
       looksLikeMetadataJsonBlock(String(inner ?? "")) ? " " : full,
     )
