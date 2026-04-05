@@ -1473,6 +1473,7 @@ const HEARTBEAT_PROMPT_BLOCK_RE =
   /(?:^|\n)\s*[^\n]*Read HEARTBEAT\.md if it exists[^\n]*(?:\n[^\S\n]*\S[^\n]*)*/gi;
 const HEARTBEAT_OK_LINE_RE = /(?:^|\n)\s*HEARTBEAT_OK\s*(?=\n|$)/g;
 const SYSTEM_EVENT_LINE_RE = /(?:^|\n)\s*(?:\[System:|System:)[^\n]*(?=\n|$)/g;
+const OPENCLAW_INTERNAL_CONTEXT_RE = /<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>[\s\S]*?<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/gi;
 const FENCED_JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const METADATA_JSON_KEY_RE =
   /"(session|sessionid|sessionkey|conversationid|channel|sender|userid|agentid|timestamp|timezone)"\s*:/gi;
@@ -1506,6 +1507,7 @@ function sanitizeUserTextForCapture(text: string): string {
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
     .replace(SENDER_METADATA_BLOCK_RE, " ")
     .replace(REPLIED_MESSAGE_BLOCK_RE, " ")
+    .replace(OPENCLAW_INTERNAL_CONTEXT_RE, " ")
     .replace(HEARTBEAT_PROMPT_BLOCK_RE, " ")
     .replace(HEARTBEAT_OK_LINE_RE, " ")
     .replace(SYSTEM_EVENT_LINE_RE, " ")
