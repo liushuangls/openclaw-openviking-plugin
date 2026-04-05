@@ -210,7 +210,7 @@ export default definePluginEntry({
           1,
         );
         const targetUri = normalizeNonEmptyString(params.targetUri) || undefined;
-        const requestLimit = Math.max(limit * 4, 20);
+        const requestLimit = limit;
         const agentId = resolveToolAgentId(ctx);
 
         try {
@@ -445,7 +445,7 @@ export default definePluginEntry({
             });
           }
 
-          const requestLimit = 20;
+          const requestLimit = cfg.recallLimit;
           const [userSettled, agentSettled] = await Promise.allSettled([
             client.find(query, USER_MEMORIES_URI, requestLimit, 0, agentId),
             client.find(query, AGENT_MEMORIES_URI, requestLimit, 0, agentId),
