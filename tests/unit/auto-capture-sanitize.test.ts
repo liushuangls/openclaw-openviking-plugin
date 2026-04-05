@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { definePluginEntryMock } = vi.hoisted(() => ({
@@ -50,6 +53,10 @@ function createAgentEndHandler(pluginConfig: Record<string, unknown> = {}) {
   return handler as AgentEndHandler;
 }
 
+function createTempHome(): string {
+  return mkdtempSync(join(tmpdir(), "ov-plugin-home-"));
+}
+
 async function runAgentEndCapture(content: string) {
   const addSessionMessageSpy = vi
     .spyOn(OpenVikingClient.prototype, "addSessionMessage")
@@ -78,12 +85,16 @@ async function runAgentEndCapture(content: string) {
 }
 
 describe("agent_end autoCapture sanitization", () => {
+  const originalHome = process.env.HOME;
+
   afterEach(() => {
+    process.env.HOME = originalHome;
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
   it("filters heartbeat prompt blocks before autoCapture", async () => {
+    process.env.HOME = createTempHome();
     const { addSessionMessageSpy, commitSessionSpy } = await runAgentEndCapture(`Read HEARTBEAT.md if it exists
 Check whether HEARTBEAT.md has pending tasks.
 If there are none, reply HEARTBEAT_OK.
@@ -101,6 +112,7 @@ Remember that I prefer spicy food.`);
   });
 
   it("skips autoCapture when the message only contains HEARTBEAT_OK", async () => {
+    process.env.HOME = createTempHome();
     const { addSessionMessageSpy, commitSessionSpy } = await runAgentEndCapture("HEARTBEAT_OK");
 
     expect(addSessionMessageSpy).not.toHaveBeenCalled();
@@ -108,6 +120,7 @@ Remember that I prefer spicy food.`);
   });
 
   it("filters system event lines before autoCapture", async () => {
+    process.env.HOME = createTempHome();
     const { addSessionMessageSpy, commitSessionSpy } = await runAgentEndCapture(`System: Running tests
 [System: Background sync finished]
 Remember that I prefer aisle seats.`);

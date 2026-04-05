@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 // @ts-ignore OpenClaw provides this module at plugin runtime.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginCommandDefinition, PluginCommandContext } from "openclaw/plugin-sdk";
@@ -24,6 +24,7 @@ import {
   selectToolMemories,
   type PrePromptCountEntry,
 } from "./src/helpers.js";
+import { CaptureStateStore } from "./src/capture-state.js";
 
 type HookContext = {
   agentId?: string;
@@ -138,6 +139,7 @@ const PRE_PROMPT_COUNT_TTL_MS = 30 * 60_000;
 const USER_MEMORIES_URI = "viking://user/memories";
 const AGENT_MEMORIES_URI = "viking://agent/memories";
 const OPENVIKING_QUEUE_DB_PATH = "/home/liushuang/docker/openviking/data/_system/queue/queue.db";
+const OPENVIKING_SESSION_DIR = "/home/liushuang/docker/openviking/data/viking/default/session/default";
 const COMMAND_TIMEOUT_MS = 5_000;
 const PLUGIN_VERSION = readPluginVersion();
 
@@ -153,6 +155,16 @@ export default definePluginEntry({
       apiKey: cfg.apiKey,
     });
     const prePromptCounts = new Map<string, PrePromptCountEntry>();
+    let captureStateStore: CaptureStateStore | undefined;
+
+    const getCaptureStateStore = (): CaptureStateStore => {
+      if (!captureStateStore) {
+        captureStateStore = new CaptureStateStore({
+          logger: api.logger,
+        });
+      }
+      return captureStateStore;
+    };
 
     api.registerTool((ctx: ToolContext) => ({
       name: "memory_recall",
@@ -528,6 +540,7 @@ export default definePluginEntry({
                 cfg,
                 client,
                 ctx,
+                captureStateStore: getCaptureStateStore(),
               }),
             };
           case "help":
@@ -709,11 +722,17 @@ export default definePluginEntry({
         const estimatedTokens = estimateTokenCount(
           captured.map((message) => message.content).join("\n"),
         );
-        if (estimatedTokens < cfg.commitTokenThreshold) {
+        const accumulatedTokens = getCaptureStateStore().recordTokens(
+          sessionId,
+          estimatedTokens,
+          ctx.sessionKey,
+        );
+        if (accumulatedTokens < cfg.commitTokenThreshold) {
           return;
         }
 
         await client.commitSession(sessionId, runtimeAgentId);
+        getCaptureStateStore().recordCommit(sessionId, ctx.sessionKey);
       } catch (error) {
         api.logger.warn?.(
           `openclaw-openviking-plugin: autoCapture via agent_end failed: ${String(error)}`,
@@ -853,14 +872,22 @@ async function buildOpenVikingStatusText(params: {
   cfg: PluginConfig;
   client: OpenVikingClient;
   ctx: PluginCommandContext;
+  captureStateStore: CaptureStateStore;
 }): Promise<string> {
   const agentId = extractAgentIdFromSessionKey(params.ctx.sessionKey);
   const [serverStatus, queueStatus, userMemoryBreakdown, agentMemoryBreakdown] = await Promise.all([
-    getOpenVikingServerStatus(params.client, agentId),
+    getOpenVikingServerStatus(params.client),
     getOpenVikingQueueStatus(params.cfg),
     getOpenVikingMemoryBreakdown(params.client, USER_MEMORIES_URI, agentId),
     getOpenVikingMemoryBreakdown(params.client, AGENT_MEMORIES_URI, agentId),
   ]);
+  const sessionCount = getOpenVikingSessionCount(params.cfg);
+  const currentSessionId = extractCommandSessionId(params.ctx);
+  const accumulatedTokens = params.captureStateStore.getAccumulatedTokens({
+    sessionId: currentSessionId,
+    sessionKey: params.ctx.sessionKey,
+  });
+  const commitCount = params.captureStateStore.getCommitCount();
 
   const lines = [
     `🦞 OpenViking Plugin v${PLUGIN_VERSION}`,
@@ -879,10 +906,19 @@ async function buildOpenVikingStatusText(params: {
     `recallMaxContentChars: ${params.cfg.recallMaxContentChars}`,
     `commitTokenThreshold: ${params.cfg.commitTokenThreshold}`,
     "",
+    "📊 Capture",
+    formatCaptureProgressLine(accumulatedTokens, params.cfg.commitTokenThreshold),
+    `commits: ${commitCount}`,
+    "",
     "🌐 OV Server",
     `status: ${serverStatus.status}`,
-    `version: ${serverStatus.version}`,
   ];
+
+  if (serverStatus.status === "online") {
+    for (const [field, value] of Object.entries(serverStatus.fields)) {
+      lines.push(`${field}: ${value}`);
+    }
+  }
 
   if (queueStatus !== null) {
     lines.push("", "📬 Queue");
@@ -899,11 +935,16 @@ async function buildOpenVikingStatusText(params: {
   lines.push(
     "",
     "🧠 Memories",
-    "user:",
-    ...formatOpenVikingBreakdownLines(userMemoryBreakdown),
-    "agent:",
-    ...formatOpenVikingBreakdownLines(agentMemoryBreakdown),
+    `user (${userMemoryBreakdown.total}):`,
+    ...formatOpenVikingBreakdownLines(userMemoryBreakdown.lines),
+    "",
+    `agent (${agentMemoryBreakdown.total}):`,
+    ...formatOpenVikingBreakdownLines(agentMemoryBreakdown.lines),
   );
+
+  if (sessionCount !== null) {
+    lines.push("", `sessions: ${sessionCount}`);
+  }
 
   return lines.join("\n");
 }
@@ -914,6 +955,23 @@ function formatYesNo(value: boolean): string {
 
 function formatCaptureSessionFilter(filters: string[]): string {
   return filters.length > 0 ? filters.join(", ") : "none";
+}
+
+function formatCaptureProgressLine(accumulatedTokens: number, threshold: number): string {
+  const safeAccumulatedTokens = Math.max(0, Math.floor(accumulatedTokens));
+  const safeThreshold = Math.max(0, Math.floor(threshold));
+  const percentage =
+    safeThreshold > 0
+      ? Math.min(100, Math.floor((safeAccumulatedTokens * 100) / safeThreshold))
+      : safeAccumulatedTokens > 0
+        ? 100
+        : 0;
+
+  return `accumulated: ${safeAccumulatedTokens} / ${safeThreshold} tokens (${percentage}%)`;
+}
+
+function extractCommandSessionId(ctx: PluginCommandContext): string | undefined {
+  return normalizeNonEmptyString((ctx as { sessionId?: unknown }).sessionId) || undefined;
 }
 
 function extractAgentIdFromSessionKey(sessionKey: string | undefined): string | undefined {
@@ -928,22 +986,24 @@ function extractAgentIdFromSessionKey(sessionKey: string | undefined): string | 
 
 async function getOpenVikingServerStatus(
   client: OpenVikingClient,
-): Promise<{ status: "online" | "offline"; version: string }> {
+): Promise<{ status: "online" | "offline"; version: string; fields: Record<string, string> }> {
   try {
     const health = await withTimeout(
       client.getHealth(),
       COMMAND_TIMEOUT_MS,
       "health",
     );
-    if (health.healthy) {
-      return {
-        status: "online",
-        version: health.version || "n/a",
-      };
+    if (!health.healthy) {
+      return { status: "offline", version: "n/a", fields: {} };
     }
-    return { status: "offline", version: "n/a" };
+    const fields = getOpenVikingServerFields(health);
+    return {
+      status: "online",
+      version: fields.version || "n/a",
+      fields,
+    };
   } catch {
-    return { status: "offline", version: "n/a" };
+    return { status: "offline", version: "n/a", fields: {} };
   }
 }
 
@@ -951,11 +1011,50 @@ function formatOpenVikingBreakdownLines(entries: string[]): string[] {
   return entries.map((entry) => `  ${entry}`);
 }
 
+function getOpenVikingServerFields(health: Record<string, unknown>): Record<string, string> {
+  const fields: Record<string, string> = {
+    version: normalizeStatusFieldValue(health.version) || "n/a",
+  };
+
+  for (const [key, value] of Object.entries(health)) {
+    if (key === "healthy" || key === "status" || key === "version") {
+      continue;
+    }
+    const normalized = normalizeStatusFieldValue(value);
+    if (normalized !== null) {
+      fields[key] = normalized;
+    }
+  }
+
+  return fields;
+}
+
+function normalizeStatusFieldValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    return normalized || null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 async function getOpenVikingMemoryBreakdown(
   client: OpenVikingClient,
   baseUri: string,
   agentId?: string,
-): Promise<string[]> {
+): Promise<{ total: number; lines: string[] }> {
   try {
     const topLevel = await withTimeout(client.ls(baseUri, agentId), COMMAND_TIMEOUT_MS, baseUri);
     const subDirs = topLevel
@@ -970,7 +1069,7 @@ async function getOpenVikingMemoryBreakdown(
           const uri = `${baseUri}/${dir}`;
           const items = await withTimeout(client.ls(uri, agentId), COMMAND_TIMEOUT_MS, uri);
           const count = items.filter((item) => !asRecord(item)?.isDir).length;
-          return `${dir}: ${count}`;
+          return { name: dir, count };
         } catch (error) {
           if (error instanceof OpenVikingRequestError && error.status === 404) {
             return null;
@@ -980,9 +1079,23 @@ async function getOpenVikingMemoryBreakdown(
       }),
     );
 
-    return counts.filter((item): item is string => Boolean(item));
+    const lines: string[] = [];
+    let total = 0;
+
+    for (const entry of counts) {
+      if (!entry) {
+        continue;
+      }
+      total += entry.count;
+      lines.push(`${entry.name}: ${entry.count}`);
+    }
+
+    return { total, lines };
   } catch {
-    return ["unavailable"];
+    return {
+      total: 0,
+      lines: ["unavailable"],
+    };
   }
 }
 
@@ -1014,6 +1127,20 @@ async function getOpenVikingQueueStatus(
     }
 
     return counts;
+  } catch {
+    return null;
+  }
+}
+
+function getOpenVikingSessionCount(cfg: PluginConfig): number | null {
+  if (!isLocalOpenVikingBaseUrl(cfg.baseUrl)) {
+    return null;
+  }
+
+  try {
+    return readdirSync(OPENVIKING_SESSION_DIR, { withFileTypes: true }).filter((entry) =>
+      entry.isDirectory(),
+    ).length;
   } catch {
     return null;
   }

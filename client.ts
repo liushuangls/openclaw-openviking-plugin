@@ -124,7 +124,7 @@ export class OpenVikingClient {
     );
   }
 
-  async getHealth(): Promise<{ healthy: boolean; version?: string }> {
+  async getHealth(): Promise<{ healthy: boolean; version?: string; [key: string]: unknown }> {
     try {
       const headers = new Headers();
       if (this.apiKey) headers.set("X-Api-Key", this.apiKey);
@@ -136,6 +136,7 @@ export class OpenVikingClient {
       if (!res.ok) return { healthy: false };
       const data = (await res.json()) as Record<string, unknown>;
       return {
+        ...data,
         healthy: data.healthy === true,
         version: typeof data.version === "string" ? data.version : undefined,
       };
