@@ -83,7 +83,7 @@ Add to your `openclaw.json`:
           "recallScoreThreshold": 0.15,
           "recallTokenBudget": 2000,
           "recallMaxContentChars": 500,
-          "commitTokenThreshold": 0
+          "commitTokenThreshold": 1000
         }
       }
     }
@@ -102,7 +102,7 @@ Add to your `openclaw.json`:
 | `recallScoreThreshold` | `0.15` | Minimum relevance score (0–1) |
 | `recallTokenBudget` | `2000` | Max tokens for injected memory context |
 | `recallMaxContentChars` | `500` | Max characters per memory snippet |
-| `commitTokenThreshold` | `0` | Min tokens in a turn before committing (0 = always) |
+| `commitTokenThreshold` | `1000` | Min tokens in a turn before committing (0 = always) |
 
 ## Testing
 

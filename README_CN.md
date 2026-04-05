@@ -83,7 +83,7 @@ OV_BASE_URL=http://192.168.1.100:1934 ./install.sh
           "recallScoreThreshold": 0.15,
           "recallTokenBudget": 2000,
           "recallMaxContentChars": 500,
-          "commitTokenThreshold": 0
+          "commitTokenThreshold": 1000
         }
       }
     }
@@ -102,7 +102,7 @@ OV_BASE_URL=http://192.168.1.100:1934 ./install.sh
 | `recallScoreThreshold` | `0.15` | 最低相关性分数（0–1） |
 | `recallTokenBudget` | `2000` | 注入记忆的最大 token 数 |
 | `recallMaxContentChars` | `500` | 单条记忆最大字符数 |
-| `commitTokenThreshold` | `0` | 提交记忆的最低 token 阈值（0 = 每轮都提交） |
+| `commitTokenThreshold` | `1000` | 提交记忆的最低 token 阈值（0 = 每轮都提交） |
 
 ## 测试
 
