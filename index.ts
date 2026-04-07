@@ -149,13 +149,42 @@ export default definePluginEntry({
   description:
     "Long-term memory via a running OpenViking HTTP server — hooks plus memory tools",
   register(api: OpenClawPluginApiLike) {
-    const cfg = resolvePluginConfig(api.pluginConfig);
-    const client = new OpenVikingClient({
-      baseUrl: cfg.baseUrl,
-      apiKey: cfg.apiKey,
-    });
+    let runtimeCfg: PluginConfig = { ...DEFAULT_CONFIG };
+    let runtimeCfgFingerprint = serializePluginConfig(runtimeCfg);
+    let runtimeClient: OpenVikingClient | undefined;
+    let runtimeClientFingerprint = "";
     const prePromptCounts = new Map<string, PrePromptCountEntry>();
     let captureStateStore: CaptureStateStore | undefined;
+
+    // OpenClaw 2026.4.5 may populate pluginConfig after register().
+    const getPluginConfig = (): PluginConfig => {
+      const livePluginConfig = getLivePluginConfig(api.pluginConfig);
+      if (!livePluginConfig) {
+        return runtimeCfg;
+      }
+
+      const nextCfg = resolvePluginConfig(livePluginConfig);
+      const nextFingerprint = serializePluginConfig(nextCfg);
+      if (runtimeCfgFingerprint !== nextFingerprint) {
+        runtimeCfg = nextCfg;
+        runtimeCfgFingerprint = nextFingerprint;
+      }
+
+      return runtimeCfg;
+    };
+
+    const getClient = (cfg: PluginConfig): OpenVikingClient => {
+      const nextFingerprint = `${cfg.baseUrl}\u0000${cfg.apiKey}`;
+      if (!runtimeClient || runtimeClientFingerprint !== nextFingerprint) {
+        runtimeClient = new OpenVikingClient({
+          baseUrl: cfg.baseUrl,
+          apiKey: cfg.apiKey,
+        });
+        runtimeClientFingerprint = nextFingerprint;
+      }
+
+      return runtimeClient;
+    };
 
     const getCaptureStateStore = (): CaptureStateStore => {
       if (!captureStateStore) {
@@ -202,6 +231,8 @@ export default definePluginEntry({
           });
         }
 
+        const cfg = getPluginConfig();
+        const client = getClient(cfg);
         const limit = clampInteger(params.limit, cfg.recallLimit, 1, 50);
         const scoreThreshold = clampNumber(
           params.scoreThreshold,
@@ -342,6 +373,8 @@ export default definePluginEntry({
           `memory-store-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const usedTempSession = !providedSessionId;
         const agentId = resolveToolAgentId(ctx);
+        const cfg = getPluginConfig();
+        const client = getClient(cfg);
 
         try {
           await client.addSessionMessage(sessionId, role, text, agentId);
@@ -429,6 +462,8 @@ export default definePluginEntry({
         const query = normalizeNonEmptyString(params.query);
         const confirm = params.confirm === true;
         const agentId = resolveToolAgentId(ctx);
+        const cfg = getPluginConfig();
+        const client = getClient(cfg);
 
         try {
           if (uri) {
@@ -534,7 +569,9 @@ export default definePluginEntry({
       handler: async (ctx: PluginCommandContext) => {
         const parsed = parseOpenVikingCommand(ctx.args);
         switch (parsed.kind) {
-          case "status":
+          case "status": {
+            const cfg = getPluginConfig();
+            const client = getClient(cfg);
             return {
               text: await buildOpenVikingStatusText({
                 cfg,
@@ -543,6 +580,7 @@ export default definePluginEntry({
                 captureStateStore: getCaptureStateStore(),
               }),
             };
+          }
           case "help":
             return { text: buildOpenVikingHelpText(parsed.error) };
         }
@@ -560,6 +598,7 @@ export default definePluginEntry({
         );
       }
 
+      const cfg = getPluginConfig();
       if (!cfg.autoRecall) {
         return;
       }
@@ -571,6 +610,7 @@ export default definePluginEntry({
       }
 
       const runtimeAgentId = resolveRuntimeAgentId(ctx);
+      const client = getClient(cfg);
 
       try {
         const ovReachable = await quickRecallPrecheck(client, runtimeAgentId);
@@ -657,6 +697,7 @@ export default definePluginEntry({
     });
 
     api.on("agent_end", async (event: AgentEndEvent, ctx: HookContext) => {
+      const cfg = getPluginConfig();
       if (!cfg.autoCapture) {
         return;
       }
@@ -680,6 +721,7 @@ export default definePluginEntry({
         recorded != null && recorded > 0
           ? recorded
           : Math.max(0, messages.length - 2);
+      const client = getClient(cfg);
 
       try {
         const { texts: newTexts } = extractNewTurnTexts(messages, preCount);
@@ -782,6 +824,21 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown> | undefined):
       100_000,
     ),
   };
+}
+
+function getLivePluginConfig(
+  pluginConfig: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const raw = asRecord(pluginConfig);
+  if (!raw) {
+    return undefined;
+  }
+
+  return Object.keys(raw).length > 0 ? raw : undefined;
+}
+
+function serializePluginConfig(config: PluginConfig): string {
+  return JSON.stringify(config);
 }
 
 function resolveRuntimeAgentId(ctx: HookContext): string | undefined {

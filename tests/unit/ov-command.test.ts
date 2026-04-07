@@ -218,6 +218,44 @@ describe("/ov command", () => {
     expect(result.text).not.toContain("sessions:");
   });
 
+  it("re-resolves plugin config after register when OpenClaw populates it later", async () => {
+    process.env.HOME = createTempHome();
+    vi.spyOn(OpenVikingClient.prototype, "getHealth").mockImplementation(
+      function (this: OpenVikingClient) {
+        expect((this as unknown as { baseUrl: string }).baseUrl).toBe("http://127.0.0.1:1934");
+        return Promise.resolve({
+          healthy: true,
+          status: "ok",
+          version: "v0.3.1",
+        });
+      },
+    );
+    vi.spyOn(OpenVikingClient.prototype, "ls").mockResolvedValue([]);
+
+    const { api, getCommand } = createPluginApiMock({});
+    (plugin as { register(api: unknown): void }).register(api);
+    const command = getCommand();
+    expect(command).toBeDefined();
+
+    api.pluginConfig = {
+      baseUrl: "http://127.0.0.1:1934",
+      recallScoreThreshold: 0.3,
+      commitTokenThreshold: 500,
+    };
+
+    const result = await command!.handler(
+      createBaseCommandContext({
+        args: "status",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
+
+    expect(result.text).toContain("baseUrl: http://127.0.0.1:1934");
+    expect(result.text).toContain("recallScoreThreshold: 0.3");
+    expect(result.text).toContain("commitTokenThreshold: 500");
+    expect(result.text).toContain("status: online");
+  });
+
   it("shows version n/a when OV health does not provide it", async () => {
     process.env.HOME = createTempHome();
     vi.spyOn(OpenVikingClient.prototype, "getHealth").mockResolvedValue({
@@ -255,7 +293,7 @@ describe("/ov command", () => {
     );
 
     expect(result.text).toContain("status: offline");
-    expect(result.text).toContain("accumulated: 0 / 20000 tokens (0%)");
+    expect(result.text).toContain("accumulated: 0 / 1000 tokens (0%)");
     expect(result.text).toContain("commits: 0");
     expect(result.text).not.toContain("version: n/a");
     expect(result.text).toContain("user (0):\n  unavailable");
